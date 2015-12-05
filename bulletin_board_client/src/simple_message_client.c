@@ -22,7 +22,6 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <limits.h>
-
 #include <stdbool.h>
 #include <stdarg.h>
 #include <simple_message_client_commandline_handling.h>
@@ -60,8 +59,6 @@ static const char* sprogram_arg0 = NULL;
 /** Controls the verbose output. */
 static int sverbose = 0;
 
-/** Send buffer for transferring tcp request data. */
-static char* ssend_buf = NULL;
 /*
  * ------------------------------------------------------------- prototypes --
  */
@@ -145,6 +142,7 @@ int main(int argc, const char* argv[])
     }
 
     result = execute(server, port, user, message, img_url);
+    cleanup(false);
 
     return result;
 }
@@ -156,8 +154,8 @@ int main(int argc, const char* argv[])
  *
  * \return EXIT_SUCCESS the program was successfully initialized,
  *  otherwise program startup failed.
- * \retval ENOMEM posix error out of memory.
- * \retval ENODATA posix error ENODATA no data available for maximum path length.
+ * \retval EXIT_SUCCESS everything is fine.
+ * \retval EXIT_FAILURE No data available for maximum path length.
  */
 static int init(const char** program_args)
 {
@@ -170,7 +168,7 @@ static int init(const char** program_args)
     {
         smax_path = 0;
         print_error("pathconf() failed: %s.", strerror(errno));
-        return ENODATA;
+        return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;
@@ -185,8 +183,6 @@ static int init(const char** program_args)
  */
 static void cleanup(bool exit_program)
 {
-    free(ssend_buf);
-    ssend_buf = NULL;
 
     fflush(stderr);
     fflush(stdout);
@@ -203,6 +199,7 @@ static void cleanup(bool exit_program)
  * \brief Prints error message to stderr.
  *
  * A new line is printed after the message text automatically.
+ * Printout can be formatted like printf.
  *
  * \param message output on stderr.
  *
@@ -210,30 +207,14 @@ static void cleanup(bool exit_program)
  */
 static void print_error(const char* message, ...)
 {
-    int written;
     va_list args;
 
-    written = fprintf(stderr, "%s: ", sprogram_arg0);
-    if (written < 0)
-    {
-        /* sorry we can not print to error stream */
-        cleanup(true);
-    }
+    /* do not handle return value of fprintf, because it makes no sense here */
+    (void)fprintf(stderr, "%s: ", sprogram_arg0);
     va_start(args, message);
-    written = vfprintf(stderr, message, args);
+    (void)vfprintf(stderr, message, args);
     va_end(args);
-    if (written < 0)
-    {
-        /* sorry we can not print to error stream */
-        cleanup(true);
-    }
-    written = fprintf(stderr, "\n");
-    if (written < 0)
-    {
-        /* sorry we can not print to error stream */
-        cleanup(true);
-    }
-
+    (void)fprintf(stderr, "\n");
 }
 
 /**
@@ -257,41 +238,14 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written = fprintf(stream, "  -s, --server <server>   full qualified domain name or IP address "
-            "of the server\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream,
-            "  -p, --port <port>       well-known port of the server [0..65535]\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream, "  -u, --user <name>       name of the posting user\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream,
-            "  -i, --image <URL>       URL pointing to an image of the posting user\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream,
-            "  -m, --message <message> message to be added to the bulletin board\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream, "  -v, --verbose           verbose output\n");
-    if (written < 0)
-    {
-        print_error(strerror(errno));
-    }
-    written = fprintf(stream, "  -h, --help\n");
+    written = fprintf(stream, "  -s, --server <server>   full qualified domain "
+            "name or IP address of the server\n"
+            "  -p, --port <port>       well-known port of the server [0..65535]\n"
+            "  -u, --user <name>       name of the posting user\n"
+            "  -i, --image <URL>       URL pointing to an image of the posting user\n"
+            "  -m, --message <message> message to be added to the bulletin board\n"
+            "  -v, --verbose           verbose output\n"
+            "  -h, --help\n");
     if (written < 0)
     {
         print_error(strerror(errno));
@@ -306,12 +260,17 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
 /**
  * \brief Gives messages out when verbose option is set.
  *
+ * Printout can be formatted like printf.
+ *
+ * \param file_name of c source to be print.
+ * \param function_name to be print without ().
+ * \param line source code line number.
  * \param message to be print.
  *
  * \return void
  */
-static void verbose(const char* file_name, const char* function_name, int line, const char* message,
-        ...)
+static void verbose(const char* file_name, const char* function_name, int line,
+        const char* message, ...)
 {
     int written;
     va_list args;
@@ -343,10 +302,16 @@ static void verbose(const char* file_name, const char* function_name, int line, 
 /**
  * \brief Executes the request and get the response from server.
  *
- * \param
+ * /param server address.
+ * /param port of server.
+ * /param user which wrote the message.
+ * /param message to be shown in bulletin board.
+ * /param image_url URL of image or NULL.
+ *
+ * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
  */
-static int execute(const char* server, const char* port, const char* user, const char* message,
-        const char* image_url)
+static int execute(const char* server, const char* port, const char* user,
+        const char* message, const char* image_url)
 {
     struct addrinfo hints;
     struct addrinfo* result;
@@ -362,7 +327,6 @@ static int execute(const char* server, const char* port, const char* user, const
     fd_set set;
     struct timeval timeout;
     int ready;
-
 
     /* Obtain address(es) matching host/port */
 
@@ -393,12 +357,14 @@ static int execute(const char* server, const char* port, const char* user, const
         if (connect(sfd, rp->ai_addr, rp->ai_addrlen) != -1)
             break; /* Success */
 
-        close(sfd);
+        (void)close(sfd); /* error handling is not necessary, not interested */
+                          /* in this socket */
     }
 
     if (rp == NULL)
-    { /* No address succeeded */
-        print_error("Could not connect.");
+    {
+        /* No address succeeded */
+        print_error("Could not connect %s:%s.", server, port);
         freeaddrinfo(result);
         return EXIT_FAILURE;
     }
@@ -430,13 +396,16 @@ static int execute(const char* server, const char* port, const char* user, const
     }
     else
     {
-        VERBOSE("Connection to %s (%s) on port %s established!", server, straddr, port);
+        VERBOSE("Connection to %s (%s) on port %s established!", server, straddr,
+                port);
     }
 
     freeaddrinfo(result); /* No longer needed */
 
-    /* TODO check return value */
-    (void)send_request(user, message, image_url, sfd);
+    if (send_request(user, message, image_url, sfd) != EXIT_SUCCESS)
+    {
+        return EXIT_FAILURE;
+    }
 
     /* Initialize the file descriptor set. */
     FD_ZERO(&set);
@@ -447,7 +416,7 @@ static int execute(const char* server, const char* port, const char* user, const
     timeout.tv_usec = 0;
 
     /* select returns 0 if timeout, 1 if input available, -1 if error. */
-    ready = select(FD_SETSIZE, &set, NULL, NULL, &timeout);
+    ready = select(sfd + 1, &set, NULL, NULL, &timeout);
     if (ready < 0)
     {
         /* can not handle errors or signals */
@@ -460,7 +429,7 @@ static int execute(const char* server, const char* port, const char* user, const
         perror("read");
         exit(EXIT_FAILURE);
     }
-    VERBOSE("Received %ld bytes: %s\n", (long ) nread, buf);
+    VERBOSE("Received %ld bytes.", (long ) nread);
 
     return EXIT_SUCCESS;
 }
@@ -468,9 +437,15 @@ static int execute(const char* server, const char* port, const char* user, const
 /**
  * /brief Send message request to server.
  *
+ * /param user which wrote the message.
+ * /param message to be shown in bulletin board.
+ * /param image_url URL of image or NULL.
+ * /param sfd open socket file descriptor.
  *
+ * /return EXIT_SUCCESS on succuss, else EXIT_FAILURE.
  */
-static int send_request(const char* user, const char* message, const char* image_url, int sfd)
+static int send_request(const char* user, const char* message,
+        const char* image_url, int sfd)
 {
     size_t len_user;
     size_t len_user_data;
@@ -488,7 +463,6 @@ static int send_request(const char* user, const char* message, const char* image
     {
         len_image = 0;
         len_image_url = 0;
-
     }
     else
     {
@@ -496,12 +470,13 @@ static int send_request(const char* user, const char* message, const char* image
         len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
     }
     len = len_user + len_user_data + len_image + len_image_url + len_message;
+    VERBOSE("Send request of %ld bytes.", (long ) len);
 
     send_buf = malloc(len * sizeof(char));
     if (send_buf == NULL)
     {
         print_error(strerror(ENOMEM));
-        return ENOMEM;
+        return EXIT_FAILURE;
     }
     destination = send_buf;
     strncpy(destination, SET_USER, len_user);
@@ -521,15 +496,18 @@ static int send_request(const char* user, const char* message, const char* image
     }
     strncpy(destination, message, len_message);
     /** @TODO error handling */
-    if (write(sfd, ssend_buf, len) != (ssize_t) len)
+    if (write(sfd, send_buf, len) != (ssize_t) len)
     {
-        fprintf(stderr, "partial/failed write\n");
-        exit(EXIT_FAILURE);
+        print_error("partial/failed write.");
+        free(send_buf);
+        return EXIT_FAILURE;
     }
     if (0 != shutdown(sfd, SHUT_WR)) /* no more writes */
     {
-        print_error("Could not shutdown connection: %s", strerror(errno));
+        print_error("Could not shutdown write connection: %s", strerror(errno));
+        free(send_buf);
         return EXIT_FAILURE;
     }
+    free(send_buf);
     return EXIT_SUCCESS;
 }
