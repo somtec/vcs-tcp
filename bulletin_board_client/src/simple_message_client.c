@@ -337,6 +337,7 @@ static void verbose(const char* file_name, const char* function_name, int line, 
     }
 }
 
+
 /**
  * \brief Executes the request and get the response from server.
  *
@@ -439,64 +440,8 @@ static int execute(const char* server, const char* port, const char* user, const
 
     freeaddrinfo(result); /* No longer needed */
 
-    len_user = strlen(SET_USER);
-    len_user_data = strlen(user) + 1; /* + 1 for 0xa terminator */
-    len_message = strlen(message);
-
-    if (image_url == NULL)
-    {
-        len_image = 0;
-        len_image_url = 0;
-
-    }
-    else
-    {
-        len_image = strlen(SET_IMAGE);
-        len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
-    }
-    len = len_user + len_user_data + len_image + len_image_url + len_message;
-
-    if (ssend_buf != NULL)
-    {
-        free(ssend_buf);
-    }
-
-    ssend_buf = malloc(len * sizeof(char));
-    if (ssend_buf == NULL)
-    {
-        print_error(strerror(ENOMEM));
-        return ENOMEM;
-    }
-    destination = ssend_buf;
-    strncpy(destination, SET_USER, len_user);
-    destination += len_user;
-    strncpy(destination, user, len_user_data - 1);
-    destination += len_user_data - 1;
-    *destination = FIELD_TERMINATOR;
-    ++destination;
-    if (image_url != NULL)
-    {
-        strncpy(destination, SET_IMAGE, len_image);
-        destination += len_image;
-        strncpy(destination, image_url, len_image_url - 1);
-        destination += len_image_url - 1;
-        *destination = FIELD_TERMINATOR;
-        ++destination;
-    }
-    strncpy(destination, message, len_message);
-
-    /** @TODO error handling */
-    if (write(sfd, ssend_buf, len) != (ssize_t) len)
-    {
-        fprintf(stderr, "partial/failed write\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (0 != shutdown(sfd, SHUT_WR)) /* no more writes */
-    {
-        print_error("Could not shutdown connection: %s", strerror(errno));
-        return EXIT_FAILURE;
-    }
+    send_request(len_user, len_user_data, user, len_message, message, image_url, len_image,
+            len_image_url, len, sfd, ssend_buf, destination);
 
     /* Initialize the file descriptor set. */
     FD_ZERO(&set);
@@ -522,6 +467,75 @@ static int execute(const char* server, const char* port, const char* user, const
     }
     VERBOSE("Received %ld bytes: %s\n", (long ) nread, buf);
 
+    return EXIT_SUCCESS;
+}
+
+/**
+ * /brief Send message request to server.
+ *
+ *
+ */
+static int send_request(const char* user, const char* message, const char* image_url, int sfd)
+{
+    size_t len_user;
+    size_t len_user_data;
+    size_t len_message;
+    size_t len_image;
+    size_t len_image_url;
+    size_t len;
+    char* send_buf;
+    char* destination;
+
+    len_user = strlen(SET_USER);
+    len_user_data = strlen(user) + 1; /* + 1 for 0xa terminator */
+    len_message = strlen(message);
+    if (image_url == NULL)
+    {
+        len_image = 0;
+        len_image_url = 0;
+
+    }
+    else
+    {
+        len_image = strlen(SET_IMAGE);
+        len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
+    }
+    len = len_user + len_user_data + len_image + len_image_url + len_message;
+
+    ssend_buf = malloc(len * sizeof(char));
+    if (ssend_buf == NULL)
+    {
+        print_error(strerror(ENOMEM));
+        return ENOMEM;
+    }
+    destination = ssend_buf;
+    strncpy(destination, SET_USER, len_user);
+    destination += len_user;
+    strncpy(destination, user, len_user_data - 1);
+    destination += len_user_data - 1;
+    *destination = FIELD_TERMINATOR;
+    ++destination;
+    if (image_url != NULL)
+    {
+        strncpy(destination, SET_IMAGE, len_image);
+        destination += len_image;
+        strncpy(destination, image_url, len_image_url - 1);
+        destination += len_image_url - 1;
+        *destination = FIELD_TERMINATOR;
+        ++destination;
+    }
+    strncpy(destination, message, len_message);
+    /** @TODO error handling */
+    if (write(sfd, ssend_buf, len) != (ssize_t) len)
+    {
+        fprintf(stderr, "partial/failed write\n");
+        exit(EXIT_FAILURE);
+    }
+    if (0 != shutdown(sfd, SHUT_WR)) /* no more writes */
+    {
+        print_error("Could not shutdown connection: %s", strerror(errno));
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }
 
