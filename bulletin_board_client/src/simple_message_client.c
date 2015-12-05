@@ -73,6 +73,8 @@ static void verbose(const char* file_name, const char* function_name, int line, 
         ...);
 static int execute(const char* server, const char* port, const char* user, const char* message,
         const char* image_url);
+static int send_request(const char* user, const char* message, const char* image_url, int sfd);
+
 
 /*
  * -------------------------------------------------------------- functions --
@@ -351,15 +353,8 @@ static int execute(const char* server, const char* port, const char* user, const
     struct addrinfo* rp;
     int info;
     int sfd;
-    size_t len;
     ssize_t nread;
     char buf[1000];
-    size_t len_user;
-    size_t len_user_data;
-    size_t len_message;
-    size_t len_image;
-    size_t len_image_url;
-    char* destination;
     void* in_addr = NULL;
     char straddr[INET6_ADDRSTRLEN];
     struct sockaddr_in* s4;
@@ -440,8 +435,8 @@ static int execute(const char* server, const char* port, const char* user, const
 
     freeaddrinfo(result); /* No longer needed */
 
-    send_request(len_user, len_user_data, user, len_message, message, image_url, len_image,
-            len_image_url, len, sfd, ssend_buf, destination);
+    /* TODO check return value */
+    (void)send_request(user, message, image_url, sfd);
 
     /* Initialize the file descriptor set. */
     FD_ZERO(&set);
@@ -502,13 +497,13 @@ static int send_request(const char* user, const char* message, const char* image
     }
     len = len_user + len_user_data + len_image + len_image_url + len_message;
 
-    ssend_buf = malloc(len * sizeof(char));
-    if (ssend_buf == NULL)
+    send_buf = malloc(len * sizeof(char));
+    if (send_buf == NULL)
     {
         print_error(strerror(ENOMEM));
         return ENOMEM;
     }
-    destination = ssend_buf;
+    destination = send_buf;
     strncpy(destination, SET_USER, len_user);
     destination += len_user;
     strncpy(destination, user, len_user_data - 1);
@@ -538,4 +533,3 @@ static int send_request(const char* user, const char* message, const char* image
     }
     return EXIT_SUCCESS;
 }
-
