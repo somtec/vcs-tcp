@@ -1,555 +1,527 @@
 /**
  * @file simple_message_client.c
- * VCS TCP/IP Client
  *
- * @author Andrea Maierhofer
- * @author Thomas Schmid
- * @date 2015/11/30
  *
- * @version $Revision: 45 $
+ * @version $Revision: 1.0 $
  *
- * Last Modified: $Author: Thomas Schmid $
+ * @TODO store received stream on disk
+ * @TODO overwork read in of stream blockwise
+ * @TODO error handling in execute on read in
+ *
  */
 
- /*
- * -------------------------------------------------------------- includes --
+/*
+ * --------------------------------------------------------------- includes --
  */
 
-#include <stdlib.h>
 #include <stdio.h>
-#include <netdb.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdlib.h>
 #include <errno.h>
-#include <sys/socket.h>
+#include <unistd.h>
 #include <sys/types.h>
-#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <limits.h>
+
+#include <stdbool.h>
+#include <stdarg.h>
 #include <simple_message_client_commandline_handling.h>
+#include <string.h>
+#include <arpa/inet.h>
 
 /*
- * --------------------------------------------------------------- defines --
+ * ---------------------------------------------------------------- defines --
  */
 
-#define MAX_SIZE 256
+/* macro used for printing source line etc. in verbose function */
+#define VERBOSE(...) verbose(__FILE__, __func__, __LINE__, __VA_ARGS__)
+
+/* Defines for the request entries */
+#define SET_USER "user="
+#define SET_IMAGE "img="
+
+/* Define for the request field terminator */
+#define FIELD_TERMINATOR '\n'
 
 /*
- * --------------------------------------------------------------- globals --
+ * ---------------------------------------------------------------- globals --
  */
-
-/* Globals are bad, but in this case it's better than passing verbose/prg to every function to get the logging-output ;) */
-int verbose = FALSE;
-const char *prg;
 
 /*
- * ------------------------------------------------------------- functions --
+ * --------------------------------------------------------------- static --
  */
 
-static void usage (FILE *out, const char *command, int exitcode);
-void logging(char *message);
-void printerr(char *message);
-void *get_in_addr(struct sockaddr *sa);
-int sendMessage(int socketfd, const char* user, const char* message, const char* image);
-int getResponse(int socketfd);
-int getValue(char* data, const char *key, char *value);
+/** Maximum path length of file system. */
+static long int smax_path = 0;
 
-/**
- * \brief This is the main entry point for any C program.
- *
- * \param argc the number of arguments
- * \param argv the arguments itselves (including the program name in argv[0])
- *
- * \return      if we had an error somewhere
- * \retval      EXIT_FAILURE if we had at least one error
- * \retval      EXIT_SUCCESS if we had no error
- *
- */
-int main(int argc, const char* argv[]) {
-  const char* server  = NULL;
-    const char* port    = NULL;
-    const char* user    = NULL;
-    const char* message = NULL;
-    const char* image   = NULL;
+/** Current program arguments. */
+static const char* sprogram_arg0 = NULL;
 
-  int socketfd;
-  struct addrinfo hints, *servinfo, *p;
-  int result;
+/** Controls the verbose output. */
+static int sverbose = 0;
 
-  smc_parsecommandline(argc, argv, &usage, &server, &port, &user, &message, &image, &verbose);
-  prg = argv[0]; /* get the program name for logging */
-
-  memset(&hints, 0, sizeof hints);
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  result = getaddrinfo(server, port, &hints, &servinfo);
-  if (result != 0) {
-    fprintf(stderr, "%s: getaddrinfo: %s\n", prg, gai_strerror(result));
-    return EXIT_FAILURE;
-  }
-
-  /* loop through all the results and connect to the first we can */
-  for(p = servinfo; p != NULL; p = p->ai_next) {
-    if ((socketfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-      logging("socket");
-      continue;
-    }
-    if (connect(socketfd, p->ai_addr, p->ai_addrlen) == -1) {
-      close(socketfd);
-      logging("connect");
-      continue;
-    }
-    break;
-  }
-
-  if (p == NULL) {
-    /*
-     * ### FB_CF: Ressourcenleak (freeaddrinfo fehlt) [-2]
-     */
-    fprintf(stderr, "%s: failed to connect\n",prg);
-    return EXIT_FAILURE;
-  }
-
-  freeaddrinfo(servinfo); /* all done with this structure */
-
-  /* Send the message */
-  result = sendMessage(socketfd, user, message, image);
-
-  /* If something went wrong --> exit */
-  if (result == FALSE) {
-    close(socketfd);
-      printerr("Error in sending the message");
-    return EXIT_FAILURE;
-    }
-
-  /* Handle the response */
-  result = getResponse(socketfd);
-
-  /* If something went wrong --> exit */
-  if (result == FALSE) {
-    close(socketfd);
-      printerr("Error in receiving the response");
-     /*
-      * ### FB_CF: Fehlerhafter exit code beim Client (nicht Status des Servers) [-2]
-      */
-    return EXIT_FAILURE;
-    }
-
-  /* We are done with the socket */
-  close(socketfd);
-
-
-  return EXIT_SUCCESS;
-}
-
-/**
- * \brief a function pointer to a function  that  is  called  upon  a
- *        failure  in  command line parsing by smc_parsecommandline()
- *        The type of  this  function pointer is: typedef void (* smc_usagefunc_t) (FILE *, const char *, int);
- *
- * \param out      - specifies the output (STDOUT/STDIN - depends on the -h parameter or in case of an error)
- * \param command  - a string containing the name of the executable  (i.e., the contents of argv[0]).
- * \param exitcode - the exit code to be used in the call to exit(exitcode) for terminating the program.
- */
-static void usage(FILE *out, const char *prg, int exitcode) {
-  /* Error handling of fprintf isn't necessary because of the exit-function at the end */
-  fprintf(out,"usage: %s options\n",prg);
-    fprintf(out,"options:\n");
-    fprintf(out,"\t-s, --server <server>   full qualified domain name or IP address of the server\n");
-    fprintf(out,"\t-p, --port <port>       well-known port of the server [0..65535]\n");
-    fprintf(out,"\t-u, --user <name>       name of the posting user\n");
-    fprintf(out,"\t-i, --image <URL>       URL pointing to an image of the posting user\n");
-    fprintf(out,"\t-m, --message <message> message to be added to the bulletin board\n");
-    fprintf(out,"\t-v, --verbose           verbose output (for debugging purpose)\n");
-    fprintf(out,"\t-h, --help\n");
-
-    exit(exitcode);
-}
-
-/**
- * \brief Logging function
- *
- * \param message - The message that should be printed out
- */
-void logging(char *message) {
-  int result = 0;
-  if(verbose == TRUE) {
-    result = fprintf(stdout,"%s: %s\n",prg , message);
-    /* fptintf: If an output error is encountered, a negative value is returned. */
-    if(result < 0) {
-      /* Error on printing on stdout - Try to write this on stderr
-       * - if this also fails it does not make sense to exit the program. It's just the logging function. So there is no error handling.
-       */
-      fprintf(stderr,"Cannot print on stdout\n");
-    }
-  }
-}
-
-/**
- * \brief Prints errors
- *
- * \param message - The error message
- */
-void printerr(char *message) {
-  /* Try to write the message on stderr
-   * - if this fails it does not make really sense to exit the program because this logic is handled in other ways.
-   *   So there is no error handling for fprintf.
-   */
-  fprintf(stderr,"%s: %s\n", prg, message);
-}
-
-/**
- * \brief get sockaddr, IPv4 or IPv6:
- *        Thanks to Beej's ;)
- *
- * \param sockaddr - The socket address that will be converted to an IPv4 or IPv6 address (input & output parameter)
- */
-void *get_in_addr(struct sockaddr *sa) {
-  if (sa->sa_family == AF_INET) {
-    return &(((struct sockaddr_in*)sa)->sin_addr);
-  }
-
-  return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
-
-/**
- * \brief Sends a message to the server
- *
- * \param socketfd the socket file descriptor
- * \param user     the user
- * \param message  the messgae
- * \param image    the URL of the image
- *
- * \return      if we had an error somewhere
- */
-int sendMessage(int socketfd, const char* user, const char* message, const char* image) {
-  /* An alternative approach would be to use the send-syscall (and the sendall function in Beej's Guide).
-   * But in the verbose output of the originial simple_message_client it seems to be handled this way.
-   * --> Trying to flush file pointer associated with socket ...
-   * And there should be no difference because Linux handles sockets like files
-   */
-    FILE *openClientSocket;
-  char verboseString[MAX_SIZE];
-
-  logging("Trying to open file descriptor writing");
-  openClientSocket = fdopen(socketfd,"w");
-
-    if (openClientSocket == NULL) {
-        printerr("Failed to open socket for writing");
-        return FALSE;
-    }
-
-  /* After every field there is a newline (0x0a) as a field seperator! */
-
-  /* Just 4 logging (verbose) */
-  if(sprintf(verboseString, "Sent request user=\"%s\"", user) < 0) {
-    printerr("Failed to write verboseString");
-  }
-
-  /* Print the user with the user indicator */
-  logging("Trying to send the user field ...");
-    if (fprintf(openClientSocket,"user=%s\n",user) < 0) {
-        /* fptintf: If an output error is encountered, a negative value is returned. */
-        printerr("Failed to write the user to the stream");
-        /*
-         * ### FB_CF: Resourceleak (z.B., fehlendes free() oder close()) [-2]
-         */
-        return FALSE;
-    }
-
-  /* Only print the image, if there is an image ;) */
-    if (image != NULL) {
-    logging("Trying to send the image field ...");
-
-    /* Just 4 logging (verbose) */
-    if(sprintf(verboseString, "%s, img=\"%s\"", verboseString, image) < 0) {
-      printerr("Failed to write verboseString");
-    }
-
-    /* Print the image with the image indicator */
-        if (fprintf(openClientSocket,"img=%s\n",image) < 0) {
-            printerr("Failed to write the image url to the stream");
-            /*
-             * ### FB_CF: Resourceleak (z.B., fehlendes free() oder close())
-             */
-            return FALSE;
-        }
-    }
-
-  logging("Trying to send the message field ...");
-  /* Just 4 logging (verbose) */
-  if(sprintf(verboseString, "%s, message=\"%s\"", verboseString, message) < 0) {
-    printerr("Failed to write verboseString");
-  }
-  /* Just print the message to the stream without a field indicator */
-    if (fprintf(openClientSocket,"%s\n",message) < 0)     {
-        printerr("Failed to write the message to the stream");
-        /*
-         * ### FB_CF: Resourceleak (z.B., fehlendes free() oder close())
-         */
-        return FALSE;
-    }
-
-  logging("Trying to flush file pointer associated with socket ...");
-    if (fflush(openClientSocket)!=0) {
-        printerr("Failed to flush the stream after writing");
-        /*
-         * ### FB_CF: Resourceleak (z.B., fehlendes free() oder close())
-         */
-        return FALSE;
-    }
-
-  logging("Trying to shutdown socket associated with file pointer ...");
-  /* Shutdown the write direction. The server get's an EOF */
-    if (shutdown(socketfd, SHUT_WR) != 0) {
-        printerr("Failed to close writing direction of the stream");
-        /*
-         * ### FB_CF: Resourceleak (z.B., fehlendes free() oder close())
-         */
-        return FALSE;
-    }
-
-  /* Don't close the file descriptor here because the socket cannot be opened again in getResponse. It seems that the socket gets also closed when the file descriptor is closed. */
-
-  logging(verboseString);
-
-    return TRUE;
-}
-
-/**
- * \brief Handles the response
- *
- * \param socketfd the socket file descriptor
- *
- * \return      if we had an error somewhere (TRUE/FALSE)
- */
-int getResponse(int socketfd) {
-  FILE *openClientSocket;
-  FILE *fileToWrite = NULL;
-  char buffer[MAX_SIZE];
-  char value[MAX_SIZE];
-  char verboseString[MAX_SIZE];
-  char *endptr;
-  int mode = 0;       /* 0=Status lesen, 1=filename lesen, 2=length lesen, 3=data lesen */
-  int status = -1;
-  int filelen = 0;
-  int received = 0;
-  int max_buf_size = 0;
-  int bytesread = 0;
-  int i_i = 0;
-
-  logging("Trying to open file descriptor reading");
-  openClientSocket = fdopen(socketfd,"r");
-  if (openClientSocket == NULL) {
-        printerr("Failed to open socket for reading");
-        return FALSE;
-    }
+/** Send buffer for transferring tcp request data. */
+static char* ssend_buf = NULL;
 /*
- * ### FB_CF: Eine Zeile kann aber auch länger sein [-2]
+ * ------------------------------------------------------------- prototypes --
  */
-  while(fgets(buffer,MAX_SIZE,openClientSocket) != NULL) {
-    if(mode == 0) {
-      /* First read the status */
-      if(getValue(buffer,"status=",value) == 0) {
-        getValue(buffer,"status=",value);
-        status = strtol(value, &endptr, 10);
-        if (value == endptr){
-          printerr("Error converting status to integer");
-        /*
-         * ### FB_CF: Resourceleak (openClientSocket) [-2]
-         */
-          return FALSE;
-        }
-
-        if(status == 0) {
-          /* Just 4 logging */
-          if(sprintf(verboseString, "Status okay: %d",status) < 0) {
-            printerr("Failed to write verboseString");
-          }
-          logging(verboseString);
-
-          mode = 1;
-        } else {
-          /* Just 4 logging */
-          if(sprintf(verboseString, "Status not okay: %d",status) < 0) {
-            printerr("Failed to write verboseString");
-          }
-          printerr(verboseString);
-        /*
-         * ### FB_CF: Resourceleak (openClientSocket)
-         */
-          return FALSE;
-        }
-      }
-    }
-
-    if(mode == 1) {
-      /* Read the filename */
-      if(getValue(buffer,"file=",value) == 0) {
-        fileToWrite = fopen(value,"w");
-        if (fileToWrite==NULL) {
-          printerr("Unable to open file");
-        /*
-         * ### FB_CF: Resourceleak (openClientSocket)
-         */
-          return FALSE;
-        }
-
-        mode = 2;
-      }
-    }
-
-    if(mode == 2) {
-      /* Read the length */
-      if(getValue(buffer,"len=",value) == 0) {
-        filelen = strtol(value, &endptr, 10);
-        if (value == endptr){
-          printerr("Error converting len to integer");
-          /*
-           * ### FB_CF: Ressourceleak (fileToWrite) [-2]
-           */
-          /*
-           * ### FB_CF: Resourceleak (openClientSocket)
-           */
-          return FALSE;
-        }
-
-        mode = 3;
-        received = 0;
-      }
-    }
-
-    if(mode == 3) {
-      /* Read the data */
-      if(fileToWrite == NULL) {
-        printerr("Something went wrong with the modes... No file opened!");
-          /*
-           * ### FB_CF: Resourceleak (openClientSocket)
-           */
-        return FALSE;
-      }
-
-      do {
-        i_i++;
-
-        /* If the file data is still bigger than the MAX_SIZE then the buffer is set to MAX_Size */
-        if(MAX_SIZE < (filelen - received)) {
-          max_buf_size = MAX_SIZE;
-        } else {
-          max_buf_size = filelen - received;
-        }
-
-        /* Just 4 logging */
-        if(sprintf(verboseString, "Read chunk: %d @%d bytes",i_i,max_buf_size) < 0) {
-          printerr("Failed to write verboseString");
-        }
-        logging(verboseString);
-
-        /* read the data from the socket */
-        bytesread = fread(buffer,sizeof(char),max_buf_size,openClientSocket);
-        received += max_buf_size;
-
-        /* if the written bytes are not equivalent to the read bytes then a write error occured */
-        if((int) fwrite(buffer,sizeof(char),bytesread,fileToWrite) != bytesread) {
-          (void)fclose(fileToWrite); /* close file and ignore errors */
-          printerr("Error while writing to file");
-          /*
-           * ### FB_CF: Resourceleak (openClientSocket)
-           */
-          return FALSE;
-        }
-
-        /* if the whole file is received then we can close the actual written file and try to find out if there is another file-record on the tcp-stream */
-        if(received == filelen) {
-          if(fclose(fileToWrite)!=0) {
-            printerr("Error while closing to file");
-          /*
-           * ### FB_CF: Resourceleak (openClientSocket)
-           */
-            return FALSE;
-          }
-
-          logging("File read done - search for next record");
-          mode = 1; /* Next record begins with filename */
-          break;
-        }
-
-        /* If there was an error on reading from stream break this */
-        if(ferror(openClientSocket) != 0) {
-          fclose(fileToWrite);
-          printerr("Error while reading from stream");
-          /*
-           * ### FB_CF: Resourceleak (openClientSocket)
-           */
-          return FALSE;
-        }
-      } while(1);
-    }
-  }
-  logging("EOF received ...");
-
-  logging("Trying to close file pointer associated with socket ...");
-  /* Close the file pointer associated with socket */
-    if (fclose(openClientSocket) != 0) {
-        printerr("Failed to close file pointer associated with socket");
-        return FALSE;
-    }
-
-  logging("Closed read part of socket");
-
-  return TRUE;
-}
-
-/**
- * \brief Searches for key-fields and gives the value back if there was something found
- *
- * \param data  the acutal data of the tcp stream
- * \param key   the key which is searched for
- * \param value the value of the key (return value!)
- *
- * \return      if we had an error somewhere (0,-1)
- */
-int getValue(char *data, const char *key, char *value) {
-  char *newlinepos;
-  char *pos;
-  char verboseString[MAX_SIZE];
-
-    if (data != NULL)    {
-    /* Search for the key */
-    pos = strstr(data, key);
-
-    if (pos != NULL){
-      /* set the pointer after the '=' character */
-      pos = pos + strlen(key);
-      newlinepos = strchr(pos, '\n');
-
-      if (newlinepos == NULL) {
-        if(sprintf(verboseString, "getValue() - New line character not found for key: %s", key) < 0) {
-          printerr("Failed to write verboseString");
-        }
-        printerr(verboseString);
-        return -1;
-      }
-
-      /* copy the found value into the given value variable */
-
-      memset(value, 0, strlen(value));
-      strncpy(value, pos, newlinepos - pos);
-
-      /* position the pointer after the value, so we can search the next item */
-      data = data + strlen(key) + strlen(value) + 1;
-
-      if(sprintf(verboseString, "getValue() - Key: %s, Value: %s", key, value) < 0) {
-        printerr("Failed to write verboseString");
-      }
-      logging(verboseString);
-      return 0;
-    }
-  }
-
-  /* if there was an error, or no key field found -1 is returned */
-  return -1;
-}
+static void print_usage(FILE* file, const char* message, int exit_code);
+static void print_error(const char* message, ...);
+static int init(const char** program_args);
+static void cleanup(bool exit);
+static void verbose(const char* file_name, const char* function_name, int line, const char* message,
+        ...);
+static int execute(const char* server, const char* port, const char* user, const char* message,
+        const char* image_url);
 
 /*
- * =================================================================== eof ==
+ * -------------------------------------------------------------- functions --
  */
+
+/**
+ * @brief       Main function
+ *
+ * This function is the main entry point of the program. 
+ * it opens a connection to specified server and sends and receives data
+ * This is the main entry point for any C program.
+ *
+ * \param argc the number of arguments.
+ * \param argv the arguments itself (including the program name in argv[0]).
+ *
+ * \return EXIT_SUCCESS on success  EXIT_FAILURE on error.
+ * \retval EXIT_SUCCESS Program ended successfully.
+ * \retval EXIT_FAILURE Program ended with failure.
+ */
+int main(int argc, const char* argv[])
+{
+    int result;
+    const char* server;
+    const char* port;
+    const char* user;
+    const char* message;
+    const char* img_url;
+    const char* img_url_text;
+    char* end_ptr;
+    long int port_nr;
+
+    sprogram_arg0 = argv[0];
+
+    smc_parsecommandline(argc, argv, print_usage, &server, &port, &user, &message, &img_url,
+            &sverbose);
+
+    errno = 0;
+    port_nr = strtol(port, &end_ptr, 10);
+    if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
+            || (errno != 0 && port_nr == 0))
+    {
+        print_error("Can not convert port number (%s).", strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+    if (end_ptr == port)
+    {
+        print_error("No digits were found.");
+        return EXIT_FAILURE;
+    }
+
+    if (port_nr < 0 && port_nr > 65535)
+    {
+        print_error("Port number out of range.");
+        print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
+    }
+
+    img_url_text = img_url == NULL ? "<no image>" : img_url;
+    VERBOSE("Got parameter server %s, port %s, user %s, message %s, "
+            "image %s", server, port, user, message, img_url_text);
+
+    /* so_REuseaddr mit setsockopt im server */
+
+    result = init(argv);
+    if (EXIT_SUCCESS != result)
+    {
+        cleanup(true);
+    }
+
+    result = execute(server, port, user, message, img_url);
+
+    return result;
+}
+
+/**
+ * \brief Initializes the program.
+ *
+ * \param program_args is the program argument vector.
+ *
+ * \return EXIT_SUCCESS the program was successfully initialized,
+ *  otherwise program startup failed.
+ * \retval ENOMEM posix error out of memory.
+ * \retval ENODATA posix error ENODATA no data available for maximum path length.
+ */
+static int init(const char** program_args)
+{
+    sprogram_arg0 = program_args[0];
+    VERBOSE("Initialize program.");
+
+    /* get maximum directory size */
+    smax_path = pathconf(".", _PC_PATH_MAX);
+    if (-1 == smax_path)
+    {
+        smax_path = 0;
+        print_error("pathconf() failed: %s.", strerror(errno));
+        return ENODATA;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * \brief Cleanup the program.
+ *
+ * \param exit_program when set to TRUE exit program immediately with EXIT_FAILURE.
+ *
+ * \return void
+ */
+static void cleanup(bool exit_program)
+{
+    free(ssend_buf);
+    ssend_buf = NULL;
+
+    fflush(stderr);
+    fflush(stdout);
+
+    if (exit_program)
+    {
+        exit(EXIT_FAILURE);
+    }
+
+}
+
+/**
+ *
+ * \brief Prints error message to stderr.
+ *
+ * A new line is printed after the message text automatically.
+ *
+ * \param message output on stderr.
+ *
+ * \return void
+ */
+static void print_error(const char* message, ...)
+{
+    int written;
+    va_list args;
+
+    written = fprintf(stderr, "%s: ", sprogram_arg0);
+    if (written < 0)
+    {
+        /* sorry we can not print to error stream */
+        cleanup(true);
+    }
+    va_start(args, message);
+    written = vfprintf(stderr, message, args);
+    va_end(args);
+    if (written < 0)
+    {
+        /* sorry we can not print to error stream */
+        cleanup(true);
+    }
+    written = fprintf(stderr, "\n");
+    if (written < 0)
+    {
+        /* sorry we can not print to error stream */
+        cleanup(true);
+    }
+
+}
+
+/**
+ *
+ * \brief Print the usage and exits.
+ *
+ * Print the usage and exits with the given exit code.
+ *
+ * \param stream where to put the usage output.
+ * \param command name of this executable.
+ * \param exit_code to be set on exit.
+ *
+ * \return void
+ */
+static void print_usage(FILE* stream, const char* command, int exit_code)
+{
+    int written;
+
+    written = fprintf(stream, "usage: %s options\n", command);
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream, "  -s, --server <server>   full qualified domain name or IP address "
+            "of the server\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream,
+            "  -p, --port <port>       well-known port of the server [0..65535]\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream, "  -u, --user <name>       name of the posting user\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream,
+            "  -i, --image <URL>       URL pointing to an image of the posting user\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream,
+            "  -m, --message <message> message to be added to the bulletin board\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream, "  -v, --verbose           verbose output\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+    written = fprintf(stream, "  -h, --help\n");
+    if (written < 0)
+    {
+        print_error(strerror(errno));
+    }
+
+    fflush(stream);
+    fflush(stderr);
+
+    exit(exit_code);
+}
+
+/**
+ * \brief Gives messages out when verbose option is set.
+ *
+ * \param message to be print.
+ *
+ * \return void
+ */
+static void verbose(const char* file_name, const char* function_name, int line, const char* message,
+        ...)
+{
+    int written;
+    va_list args;
+
+    if (sverbose > 0)
+    {
+        written = fprintf(stdout, "%s [%s, %s(), line %d]: ", sprogram_arg0, file_name,
+                function_name, line);
+        if (written < 0)
+        {
+            print_error(strerror(errno));
+        }
+        va_start(args, message);
+        written = vfprintf(stdout, message, args);
+        if (written < 0)
+        {
+            print_error(strerror(errno));
+        }
+        va_end(args);
+        written = fprintf(stdout, "\n");
+        if (written < 0)
+        {
+            print_error(strerror(errno));
+        }
+    }
+}
+
+/**
+ * \brief Executes the request and get the response from server.
+ *
+ * \param
+ */
+static int execute(const char* server, const char* port, const char* user, const char* message,
+        const char* image_url)
+{
+    struct addrinfo hints;
+    struct addrinfo* result;
+    struct addrinfo* rp;
+    int info;
+    int sfd;
+    size_t len;
+    ssize_t nread;
+    char buf[1000];
+    size_t len_user;
+    size_t len_user_data;
+    size_t len_message;
+    size_t len_image;
+    size_t len_image_url;
+    char* destination;
+    void* in_addr = NULL;
+    char straddr[INET6_ADDRSTRLEN];
+    struct sockaddr_in* s4;
+    struct sockaddr_in6* s6;
+    fd_set set;
+    struct timeval timeout;
+    int ready;
+
+
+    /* Obtain address(es) matching host/port */
+
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_family = AF_UNSPEC; /* Allow IPv4 or IPv6 */
+    hints.ai_socktype = SOCK_STREAM; /* TCP socket */
+    hints.ai_flags = 0;
+    hints.ai_protocol = 0; /* Any protocol */
+
+    info = getaddrinfo(server, port, &hints, &result);
+    if (info != 0)
+    {
+        print_error("getaddrinfo: %s", gai_strerror(info));
+        return EXIT_FAILURE;
+    }
+
+    /* getaddrinfo() returns a list of address structures.
+     Try each address until we successfully connect(2).
+     If socket(2) (or connect(2)) fails, we (close the socket
+     and) try the next address. */
+
+    for (rp = result; rp != NULL; rp = rp->ai_next)
+    {
+        sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sfd == -1)
+            continue;
+
+        if (connect(sfd, rp->ai_addr, rp->ai_addrlen) != -1)
+            break; /* Success */
+
+        close(sfd);
+    }
+
+    if (rp == NULL)
+    { /* No address succeeded */
+        print_error("Could not connect.");
+        freeaddrinfo(result);
+        return EXIT_FAILURE;
+    }
+
+    /* Determine IP family of found address */
+    switch (rp->ai_family)
+    {
+        case AF_INET:
+            /* IPv4 found */
+            s4 = (struct sockaddr_in *) rp->ai_addr;
+            in_addr = &s4->sin_addr;
+            break;
+        case AF_INET6:
+            /* IPv6 found */
+            s6 = (struct sockaddr_in6 *) rp->ai_addr;
+            in_addr = &s6->sin6_addr;
+            break;
+        default:
+            /* oh no, this should not happen */
+            print_error("Unknown address family: %d.", rp->ai_family);
+            freeaddrinfo(result);
+            return EXIT_FAILURE;
+
+    }
+    /* Convert IP address into printable format */
+    if (NULL == inet_ntop(rp->ai_family, in_addr, straddr, sizeof(straddr)))
+    {
+        print_error("Could not convert server address: %s.", strerror(errno));
+    }
+    else
+    {
+        VERBOSE("Connection to %s (%s) on port %s established!", server, straddr, port);
+    }
+
+    freeaddrinfo(result); /* No longer needed */
+
+    len_user = strlen(SET_USER);
+    len_user_data = strlen(user) + 1; /* + 1 for 0xa terminator */
+    len_message = strlen(message);
+
+    if (image_url == NULL)
+    {
+        len_image = 0;
+        len_image_url = 0;
+
+    }
+    else
+    {
+        len_image = strlen(SET_IMAGE);
+        len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
+    }
+    len = len_user + len_user_data + len_image + len_image_url + len_message;
+
+    if (ssend_buf != NULL)
+    {
+        free(ssend_buf);
+    }
+
+    ssend_buf = malloc(len * sizeof(char));
+    if (ssend_buf == NULL)
+    {
+        print_error(strerror(ENOMEM));
+        return ENOMEM;
+    }
+    destination = ssend_buf;
+    strncpy(destination, SET_USER, len_user);
+    destination += len_user;
+    strncpy(destination, user, len_user_data - 1);
+    destination += len_user_data - 1;
+    *destination = FIELD_TERMINATOR;
+    ++destination;
+    if (image_url != NULL)
+    {
+        strncpy(destination, SET_IMAGE, len_image);
+        destination += len_image;
+        strncpy(destination, image_url, len_image_url - 1);
+        destination += len_image_url - 1;
+        *destination = FIELD_TERMINATOR;
+        ++destination;
+    }
+    strncpy(destination, message, len_message);
+
+    /** @TODO error handling */
+    if (write(sfd, ssend_buf, len) != (ssize_t) len)
+    {
+        fprintf(stderr, "partial/failed write\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (0 != shutdown(sfd, SHUT_WR)) /* no more writes */
+    {
+        print_error("Could not shutdown connection: %s", strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+    /* Initialize the file descriptor set. */
+    FD_ZERO(&set);
+    FD_SET(sfd, &set);
+
+    /* Initialize the timeout data structure. */
+    timeout.tv_sec = 10;
+    timeout.tv_usec = 0;
+
+    /* select returns 0 if timeout, 1 if input available, -1 if error. */
+    ready = select(FD_SETSIZE, &set, NULL, NULL, &timeout);
+    if (ready < 0)
+    {
+        /* can not handle errors or signals */
+        print_error(strerror(errno));
+    }
+
+    nread = read(sfd, buf, 1000);
+    if (nread == -1)
+    {
+        perror("read");
+        exit(EXIT_FAILURE);
+    }
+    VERBOSE("Received %ld bytes: %s\n", (long ) nread, buf);
+
+    return EXIT_SUCCESS;
+}
+
