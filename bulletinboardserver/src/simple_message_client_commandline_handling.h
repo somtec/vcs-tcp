@@ -34,7 +34,7 @@
  * -------------------------------------------------------------- typedefs --
  */
 
-typedef void (* smc_usagefunc_t) (FILE *, const char *, int);
+typedef void (*smc_usagefunc_t)(FILE *, const char *, int);
 
 /*
  * --------------------------------------------------------------- globals --
@@ -67,17 +67,8 @@ typedef void (* smc_usagefunc_t) (FILE *, const char *, int);
  *         calling \a usagefunc.
  *
  */
-extern void smc_parsecommandline(
-    int argc,
-    const char * const argv[],
-    smc_usagefunc_t usagefunc, 
-    const char **server,
-    const char **port,
-    const char **user,
-    const char **message,
-    const char **img_url,
-    int *verbose
-    );
+extern void smc_parsecommandline(int argc, const char * const argv[], smc_usagefunc_t usagefunc, const char **server,
+        const char **port, const char **user, const char **message, const char **img_url, int *verbose);
 
 /*
  * =================================================================== eof ==
