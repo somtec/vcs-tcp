@@ -334,7 +334,7 @@ static int execute(const char* server, const char* port, const char* user,
     hints.ai_family = AF_UNSPEC; /* Allow IPv4 or IPv6 */
     hints.ai_socktype = SOCK_STREAM; /* TCP socket */
     hints.ai_flags = 0;
-    hints.ai_protocol = 0; /* Any protocol */
+    hints.ai_protocol = IPPROTO_TCP; 
 
     info = getaddrinfo(server, port, &hints, &result);
     if (info != 0)
