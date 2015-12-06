@@ -78,6 +78,7 @@ static int execute(const char* server, const char* port, const char* user,
 static int send_request(const char* user, const char* message,
     const char* image_url, int socket_fd);
 static int read_response(int socket_fd);
+static char* search_terminator(char* start, char* end);
 
 /*
  * -------------------------------------------------------------- functions --
@@ -244,21 +245,18 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written =
-        fprintf(stream,
-            "  -s, --server <server>   full qualified domain "
-                "name or IP address of the server\n"
-                "  -p, --port <port>       well-known port of the server [0..65535]\n"
-                "  -u, --user <name>       name of the posting user\n"
-                "  -i, --image <URL>       URL pointing to an image of the posting user\n"
-                "  -m, --message <message> message to be added to the bulletin board\n"
-                "  -v, --verbose           verbose output\n"
-                "  -h, --help\n");
+    written = fprintf(stream,
+      "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
+      "  -p, --port <port>       well-known port of the server [0..65535]\n"
+      "  -u, --user <name>       name of the posting user\n"
+      "  -i, --image <URL>       URL pointing to an image of the posting user\n"
+      "  -m, --message <message> message to be added to the bulletin board\n"
+      "  -v, --verbose           verbose output\n"
+      "  -h, --help\n");
     if (written < 0)
     {
         print_error(strerror(errno));
     }
-
     fflush(stream);
     fflush(stderr);
 
@@ -306,17 +304,17 @@ static void verbose(const char* file_name, const char* function_name, int line,
     }
 }
 
-/**
- * \brief Executes the request and get the response from server.
- *
- * /param server address.
- * /param port of server.
- * /param user which wrote the message.
- * /param message to be shown in bulletin board.
- * /param image_url URL of image or NULL.
- *
- * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
- */
+    /**
+     * \brief Executes the request and get the response from server.
+     *
+     * /param server address.
+     * /param port of server.
+     * /param user which wrote the message.
+     * /param message to be shown in bulletin board.
+     * /param image_url URL of image or NULL.
+     *
+     * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
+     */
 static int execute(const char* server, const char* port, const char* user,
     const char* message, const char* image_url)
 {
@@ -495,7 +493,7 @@ static int send_request(const char* user, const char* message,
         ++destination;
     }
     strncpy(destination, message, len_message);
-    /** @TODO error handling */
+    /** @TODO write blockwise */
     if (write(socket_fd, send_buf, len) != (ssize_t) len)
     {
         print_error("partial/failed write.");
@@ -531,13 +529,18 @@ static int read_response(int socket_fd)
     int result;
     size_t read_size;
     bool expect_status = true;
-    //bool expect_file = false;
+    //bool expect_html_file = false;
     char* current_write_pos;
     size_t amount;
     //size_t parse_amount;
     size_t len_status;
     //size_t len_file;
     // int number_of_files = 0;
+    char* search;
+    char* found;
+    long int server_status;
+    char* end_ptr;
+    size_t move;
 
     len_status = strlen(GET_STATUS);
     //len_file = strlen(GET_FILE);
@@ -576,6 +579,7 @@ static int read_response(int socket_fd)
         timeout.tv_usec = 0;
 
         /* select returns 0 if timeout, 1 if input available, -1 if error. */
+        /* wait a user defined time for socket to become ready */
         ready = select(socket_fd + 1, &set, NULL, NULL, &timeout);
         if (ready < 0)
         {
@@ -593,7 +597,6 @@ static int read_response(int socket_fd)
         }
 
         read_count = read(socket_fd, read_buf, read_size);
-        amount += read_count;
         if (read_count == -1)
         {
             print_error("read failed: %s", strerror(errno));
@@ -601,6 +604,7 @@ static int read_response(int socket_fd)
             free(parse_buf);
             return EXIT_FAILURE;
         }
+        amount += read_count;
         if (read_count == 0)
         {
             finished = true;
@@ -612,15 +616,10 @@ static int read_response(int socket_fd)
         {
             if (read_count > 0)
             {
-                memcpy(current_write_pos + read_count, read_buf, read_count);
+                memcpy(current_write_pos, read_buf, read_count);
                 current_write_pos += read_count;
             }
-#if 0
-            if (finished)
-            {
-                expect_file = true;
-            }
-#endif
+
             if (finished || (amount >= read_size))
             {
                 /* it must contain the status= string now */
@@ -629,17 +628,120 @@ static int read_response(int socket_fd)
                 {
                     /* message is too short */
                     finished = true;
-                    print_error("Malformed response.");
+                    print_error("Malformed response (status).");
                     continue;
                 }
                 if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
                 {
                     finished = true;
-                    print_error("Malformed response.");
+                    print_error("Malformed response (status).");
                     continue;
                 }
+                /* search for linefeed */
+                search = parse_buf + len_status;
+                found = search_terminator(search, parse_buf + amount);
+                if (found == search)
+                {
+                    finished = true;
+                    print_error("Malformed response (status).");
+                    continue;
+                }
+                if (found == (parse_buf + amount))
+                {
+                    /* not found */
+                    finished = true;
+                    print_error("Malformed response (status).");
+                    continue;
+                }
+                *found = '\0'; /* make a string for strtol function */ 
+                errno = 0;
+                server_status = strtol(search, &end_ptr, 10);
+                if ((errno == ERANGE && (server_status == LONG_MAX || server_status == LONG_MIN))
+                    || (errno != 0 && server_status == 0))
+                {
+                    print_error("Can not convert server status (%s).", strerror(errno));
+                    return EXIT_FAILURE;
+                }
 
+                if (end_ptr == search)
+                {
+                    print_error("No digits were found.");
+                    return EXIT_FAILURE;
+                }
 
+                if (server_status < INT_MIN && server_status > INT_MAX)
+                {
+                    print_error("Server status exceeds int size: %l.", server_status);
+                    /* cast the result later */
+                }
+                expect_status = false;
+                //expect_html_file = true;
+                move = (end_ptr - parse_buf + 1);
+                if (amount > move)
+                {
+                    memmove(parse_buf, end_ptr + 1, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount; 
+                }
+
+            }
+            if (expect_status)
+            {
+                if (amount < (len_status + 2))
+                 {
+                     /* message is too short */
+                     continue;
+                 }
+                 if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
+                 {
+                     finished = true;
+                     print_error("Malformed response (status).");
+                     continue;
+                 }
+                 /* search for linefeed */
+                 search = parse_buf + len_status;
+                 found = search_terminator(search, parse_buf + amount);
+                 if (found == search)
+                 {
+                     finished = true;
+                     print_error("Malformed response (status).");
+                     continue;
+                 }
+                 if (found == (parse_buf + amount))
+                 {
+                     /* not found */
+                     continue;
+                 }
+                 *found = '\0'; /* make a string for strtol function */ 
+                 errno = 0;
+                 server_status = strtol(search, &end_ptr, 10);
+                 if ((errno == ERANGE && (server_status == LONG_MAX || server_status == LONG_MIN))
+                     || (errno != 0 && server_status == 0))
+                 {
+                     print_error("Can not convert server status (%s).", strerror(errno));
+                     return EXIT_FAILURE;
+                 }
+
+                 if (end_ptr == search)
+                 {
+                     print_error("No digits were found.");
+                     return EXIT_FAILURE;
+                 }
+
+                 if (server_status < INT_MIN && server_status > INT_MAX)
+                 {
+                     print_error("Server status exceeds int size: %l.", server_status);
+                     /* cast the result later */
+                 }
+                 expect_status = false;
+                 //expect_html_file = true;
+                 move = (end_ptr - parse_buf + 1);
+                 if (amount > move)
+                 {
+                     memmove(parse_buf, end_ptr + 1, amount - move);
+                     amount -= move;
+                     current_write_pos = parse_buf + amount; 
+                 }
             }
         }
     }
@@ -647,5 +749,29 @@ static int read_response(int socket_fd)
     free(parse_buf);
 
     return result;
+
+}
+
+/**
+ * \brief searches the terminator character.
+ * 
+ * \param start where to start the search.
+ * \param end marker not considered to be a valid position.
+ * 
+ * \return pointer to FIELD_TERMINATOR on success, or end when not found.
+ */
+static char* search_terminator(char* start, char* end)
+{
+    char* search = start;
+
+    while (search < end)
+    {
+        if (*search == FIELD_TERMINATOR)
+        {
+            break;
+        }
+        ++search;
+    }
+    return search;
 
 }
