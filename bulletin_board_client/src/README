@@ -1,0 +1,66 @@
+Readme
+======
+
+Bulletin Board Server/client 
+Author: Andrea   Maierhofer <ic14b024@technikum-wien.at> 
+Author: Thomas   Schmid     <ic14b013@technikum-wien.at>
+
+simple_message_server:
+======================
+
+SYNOPSIS:
+
+   This program contains the TCP/IP message bulletin board server.
+
+USAGE:
+   
+   simple_message_server -p <port> 
+
+DESCRIPTION:
+   
+   parameters:
+
+      -p port : the server port number from 1 to 65535
+
+      example:
+
+         ./simple_message_server -p 6823
+
+The TCP/IP message bulletin board server opens a listening socket on the given port => socket(); bind(); listen();
+Every incoming connection is accepted via accept() and then a child process is forked via fork() where the external business logic
+is called. (execlp() call to "simple_message_server_logic")
+Because all sockets are duplicated by a fork, following socket handling must happen:
+The child process closes the listening socket and the parent closes the new socket from the accept call.
+			
+simple_message_client:
+======================
+
+SYNOPSIS:
+   
+   This program contains the TCP/IP message bulletin board client, for posting messages to the bulletin.
+       
+USAGE:
+       
+   simple_message_client  -s <server> -p <port> -u <user> -m <message> 
+
+   example:
+   
+      ./simple_message_client -s localhost -p 6823 -u ic14b013 -m Testmessage for Readme
+
+
+DESCRIPTION:
+
+   parameters:
+
+      -s server: hostname or ip address (ipv4 or ipv6) of the server
+      -p port : port number 
+      -u user : user name 
+      -m message : a message posted to the bulletin board
+      -i image :  optionally an image can be posted with the message (URL) not finished yet
+
+The simple_message_client establishes a connection to the server via the given host and port. (socket(), connect())
+It then sends the given user, message to the simple_message_server via send().
+All files from the response stream are saved in the local directory.
+
+
+
