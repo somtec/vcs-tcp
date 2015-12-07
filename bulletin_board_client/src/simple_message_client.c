@@ -4,9 +4,9 @@
  *
  * @version $Revision: 1.0 $
  *
- * @TODO store received stream on disk
- * @TODO overwork read in of stream blockwise
- * @TODO error handling in execute on read in
+ * TODO store received stream on disk
+ * TODO overwork read in of stream blockwise
+ * TODO error handling in execute on read in
  *
  */
 
