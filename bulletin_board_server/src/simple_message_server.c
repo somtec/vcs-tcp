@@ -189,7 +189,6 @@ static void cleanup(bool exit_program)
  *
  */
 char* param_check(int argc, char **argv) {
-    const char* port;
     char* end_ptr;
     long int port_nr = 0;
     char* portstr = NULL;
@@ -205,7 +204,7 @@ char* param_check(int argc, char **argv) {
     while ((c = getopt(argc, argv, "p:h::")) != EOF) {
         switch (c) {
         case 'p':
-            port_nr = strtol(port, &end_ptr, INPUT_NUM_BASE);
+            port_nr = strtol(optarg, &end_ptr, INPUT_NUM_BASE);
                if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
                    || (errno != 0 && port_nr == 0))
                {
@@ -213,7 +212,7 @@ char* param_check(int argc, char **argv) {
                    return EXIT_FAILURE;
                }
 
-               if (end_ptr == port)
+               if (end_ptr == optarg)
                {
                    print_error("No digits were found.");
                    return EXIT_FAILURE;
