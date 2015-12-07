@@ -19,7 +19,7 @@
 ##
 
 
-CC=gcc
+CC=/usr/local/bin/x86_64-unknown-linux-gnu-gcc-5.2.0
 CFLAGS=-Wall -Werror -Wextra -Wstrict-prototypes -pedantic -fno-common -g -O3 -std=gnu11
 CFLGS2=-Wall -Werror -Wextra -Wstrict-prototypes -pedantic -fno-common -g -O3 -o simple_message_client simple_message_client.o -lsimple_message_client_commandline_handling
 CFLGS3=-Wall -Werror -Wextra -Wstrict-prototypes -pedantic -fno-common -g -O3 -o simple_message_server simple_message_server.o
