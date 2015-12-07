@@ -37,6 +37,10 @@
 /*
  * ---------------------------------------------------------------- defines --
  */
+#define INPUT_NUM_BASE 10 /* decimal format base for strtol */
+
+#define LOWER_PORT_RANGE 0
+#define UPPER_PORT_RANGE 65536
 
 /* macro used for printing source line etc. in verbose function */
 #define VERBOSE(...) verbose(__FILE__, __func__, __LINE__, __VA_ARGS__)
@@ -122,7 +126,7 @@ int main(int argc, const char* argv[])
         &message, &img_url, &sverbose);
 
     errno = 0;
-    port_nr = strtol(port, &end_ptr, 10);
+    port_nr = strtol(port, &end_ptr, INPUT_NUM_BASE);
     if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
         || (errno != 0 && port_nr == 0))
     {
@@ -136,7 +140,7 @@ int main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (port_nr < 0 && port_nr > 65535)
+    if (port_nr < LOWER_PORT_RANGE && port_nr > UPPER_PORT_RANGE)
     {
         print_error("Port number out of range.");
         print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
