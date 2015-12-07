@@ -34,7 +34,6 @@
 
 #define LOWER_PORT_RANGE 0
 #define UPPER_PORT_RANGE 65536
-#define LOCALHOST "127.0.0.1"
 #define CONN_COUNT 10
 #define LOGIC_NAME "simple_message_server_logic"
 #define LOGIC_PATH "/usr/local/bin/simple_message_server_logic"
@@ -50,7 +49,7 @@ int regSigHandler(void);
 int handleConnections(int sockfd);
 static void print_error(const char* message, ...);
 static void print_usage(FILE* file, const char* message, int exit_code);
-static void cleanup(bool exit);
+//static void cleanup(bool exit);
 static int setUpConnection(const char* portnumber);
 
 
@@ -166,18 +165,18 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
  *
  * \return void
  */
-static void cleanup(bool exit_program)
-{
-
-    (void) fflush(stderr); /* do not handle erros here */
-    (void) fflush(stdout);
-
-    if (exit_program)
-    {
-        exit(EXIT_FAILURE);
-    }
-
-}
+//static void cleanup(bool exit_program)
+//{
+//
+//    (void) fflush(stderr); /* do not handle erros here */
+//    (void) fflush(stdout);
+//
+//    if (exit_program)
+//    {
+//        exit(EXIT_FAILURE);
+//    }
+//
+//}
 /**
  * \brief the method for checking the passed parameters
  *
