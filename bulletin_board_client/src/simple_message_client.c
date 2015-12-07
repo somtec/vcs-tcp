@@ -40,7 +40,7 @@
 #define INPUT_NUM_BASE 10 /* decimal format base for strtol */
 
 #define LOWER_PORT_RANGE 0
-#define UPPER_PORT_RANGE 65536
+#define UPPER_PORT_RANGE 65535
 
 /* macro used for printing source line etc. in verbose function */
 #define VERBOSE(...) verbose(__FILE__, __func__, __LINE__, __VA_ARGS__)
