@@ -49,9 +49,8 @@ int reg_sig_handler(void);
 int handle_connections(int sockfd);
 static void print_error(const char* message, ...);
 static void print_usage(FILE* file, const char* message, int exit_code);
-//static void cleanup(bool exit);
+/*static void cleanup(bool exit);*/
 static int set_up_connection(const char* portnumber);
-
 
 /* === globals ============================================================== */
 
@@ -67,25 +66,29 @@ static int set_up_connection(const char* portnumber);
  * \retval 0 if the function call was successful, 1 otherwise
  *
  */
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
     /* server port with type short int which is needed by the htons function */
     char* server_port = 0;
     int sockfd = 0;
 
-
     /* calling the getopt function to get portnum*/
     server_port = param_check(argc, argv);
-    if(server_port == NULL){
+    if (server_port == NULL)
+    {
         return EXIT_FAILURE;
     }
 
-    if ((sockfd = set_up_connection(server_port)) < 0) {
+    if ((sockfd = set_up_connection(server_port)) < 0)
+    {
         return EXIT_FAILURE;
     }
-    if (reg_sig_handler() < 0) {
+    if (reg_sig_handler() < 0)
+    {
         return EXIT_FAILURE;
     }
-    if (handle_connections(sockfd) < 0) {
+    if (handle_connections(sockfd) < 0)
+    {
         return EXIT_FAILURE;
     }
 
@@ -95,7 +98,6 @@ int main(int argc, char** argv) {
 
     return EXIT_SUCCESS;
 }
-
 
 /**
  *
@@ -141,14 +143,13 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written = fprintf(stream,
-      "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
-      "  -p, --port <port>       well-known port of the server [0..65535]\n"
-      "  -u, --user <name>       name of the posting user\n"
-      "  -i, --image <URL>       URL pointing to an image of the posting user\n"
-      "  -m, --message <message> message to be added to the bulletin board\n"
-      "  -v, --verbose           verbose output\n"
-      "  -h, --help\n");
+    written = fprintf(stream, "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
+            "  -p, --port <port>       well-known port of the server [0..65535]\n"
+            "  -u, --user <name>       name of the posting user\n"
+            "  -i, --image <URL>       URL pointing to an image of the posting user\n"
+            "  -m, --message <message> message to be added to the bulletin board\n"
+            "  -v, --verbose           verbose output\n"
+            "  -h, --help\n");
     if (written < 0)
     {
         print_error(strerror(errno));
@@ -165,18 +166,20 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
  *
  * \return void
  */
-//static void cleanup(bool exit_program)
-//{
-//
-//    (void) fflush(stderr); /* do not handle erros here */
-//    (void) fflush(stdout);
-//
-//    if (exit_program)
-//    {
-//        exit(EXIT_FAILURE);
-//    }
-//
-//}
+#if 0
+static void cleanup(bool exit_program)
+{
+
+    (void) fflush(stderr); /* do not handle erros here */
+    (void) fflush(stdout);
+
+    if (exit_program)
+    {
+        exit(EXIT_FAILURE);
+    }
+
+}
+#endif
 /**
  * \brief the method for checking the passed parameters
  *
@@ -187,68 +190,73 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
  * \retval -1 if wrong arguments are passed, otherwise the portnumber which is given with the -p argument
  *
  */
-char* param_check(int argc, char **argv) {
+char* param_check(int argc, char **argv)
+{
     char* end_ptr;
     long int port_nr = 0;
-    char* portstr = NULL;
+    char* port_str = NULL;
     int c;
-    int berror = 0;
+    int param_error = 0;
 
     opterr = 0;
 
-    if(argc<3){
-        print_usage(stderr,sprogram_arg0,EXIT_FAILURE);
+    if (argc < 3)
+    {
+        print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
     }
 
-    while ((c = getopt(argc, argv, "p:h::")) != EOF) {
-        switch (c) {
+    while ((c = getopt(argc, argv, "p:h::")) != EOF)
+    {
+        switch (c)
+        {
         case 'p':
             port_nr = strtol(optarg, &end_ptr, INPUT_NUM_BASE);
-               if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
-                   || (errno != 0 && port_nr == 0))
-               {
-                   print_error("Can not convert port number (%s).", strerror(errno));
-                   return EXIT_FAILURE;
-               }
+            if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN)) || (errno != 0 && port_nr == 0))
+            {
+                print_error("Can not convert port number (%s).", strerror(errno));
+                return EXIT_FAILURE;
+            }
 
-               if (end_ptr == optarg)
-               {
-                   print_error("No digits were found.");
-                   return EXIT_FAILURE;
-               }
+            if (end_ptr == optarg)
+            {
+                print_error("No digits were found.");
+                return EXIT_FAILURE;
+            }
 
-               if (port_nr < LOWER_PORT_RANGE || port_nr > UPPER_PORT_RANGE)
-               {
-                   print_error("Port number out of range.");
-                   print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
-               }
-            portstr = optarg;
+            if (port_nr < LOWER_PORT_RANGE || port_nr > UPPER_PORT_RANGE)
+            {
+                print_error("Port number out of range.");
+                print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
+            }
+            port_str = optarg;
             break;
         case 'h':
             /* when the usage message is requested, program will exit afterwards */
-            print_usage(stdout,sprogram_arg0,EXIT_SUCCESS);
+            print_usage(stdout, sprogram_arg0, EXIT_SUCCESS);
             break;
         case '?':
-            /* occurs, when other arguments than -p or -h are passed */
-            print_usage(stderr,sprogram_arg0,EXIT_FAILURE);
-            break;
         default:
-            assert(0);
+            /* occurs, when other arguments than -p or -h are passed */
+            print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
+            break;
         }
     }
     /* if user somehow messed other things up :) */
-    if (argc - optind >= 1) {
-        berror = 1;
+    if (argc - optind >= 1)
+    {
+        param_error = 1;
     }
 
-    if (berror == 1) {
-        print_usage(stderr,sprogram_arg0,EXIT_FAILURE);
+    if (param_error == 1)
+    {
+        print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
         return NULL;
     }
-    return portstr;
+    return port_str;
 }
 
-int reg_sig_handler(void) {
+int reg_sig_handler(void)
+{
     struct sigaction sig;
     sig.sa_handler = kill_zombies;
     /*
@@ -264,7 +272,8 @@ int reg_sig_handler(void) {
 /**
  * \brief knifes all the zombies
  */
-void kill_zombies(int signal) {
+void kill_zombies(int signal)
+{
     /*
      * waitpid waits for information about child-processes
      * (pid_t)(-1) means, status is requested for any child process
@@ -273,12 +282,13 @@ void kill_zombies(int signal) {
      * WNOHANG makes this function non-blocking
      */
     (void) signal;
-    while (waitpid((pid_t) (-1), 0, WNOHANG) > 0) {
+    while (waitpid((pid_t) (-1), 0, WNOHANG) > 0)
+    {
     }
 }
 
-
-static int set_up_connection(const char* portnumber) {
+static int set_up_connection(const char* portnumber)
+{
     int sockfd = 0;
     struct addrinfo hints;
     struct addrinfo *result, *rp;
@@ -290,7 +300,6 @@ static int set_up_connection(const char* portnumber) {
     hints.ai_socktype = SOCK_STREAM; /* Datagram socket */
     hints.ai_flags = AI_PASSIVE; /* For my IP */
 
-
     /*
      * ### FB_CF:  Also hier getaddrinfo() zu verwenden bringt's nicht so
      *             wirklich. - Außerdem wissen Sie dadurch nicht, ob Ihr Server
@@ -301,7 +310,8 @@ static int set_up_connection(const char* portnumber) {
      * getting a linked list of available adresses.
      * stores the first one in &result
      */
-    if (getaddrinfo(NULL, portnumber, &hints, &result) != 0) {
+    if (getaddrinfo(NULL, portnumber, &hints, &result) != 0)
+    {
 
         print_error("error getaddrinfo\n");
         return -1;
@@ -311,26 +321,31 @@ static int set_up_connection(const char* portnumber) {
      * trys to bind to the available adresses.
      * breaks, if binding to one was successful.
      */
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
+    for (rp = result; rp != NULL; rp = rp->ai_next)
+    {
         sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (sockfd == -1) {
+        if (sockfd == -1)
+        {
             continue;
         }
-        if (bind(sockfd, rp->ai_addr, rp->ai_addrlen) == 0) {
+        if (bind(sockfd, rp->ai_addr, rp->ai_addrlen) == 0)
+        {
             break;
         }
         close(sockfd);
     }
 
     /* no address succeeded */
-    if (rp == NULL) {
+    if (rp == NULL)
+    {
         print_error("error bin\n");
         return -1;
     }
 
     freeaddrinfo(result);
 
-    if (listen(sockfd, CONN_COUNT) < 0) {
+    if (listen(sockfd, CONN_COUNT) < 0)
+    {
 
         print_error("error listen\n");
         (void) close(sockfd);
@@ -340,14 +355,17 @@ static int set_up_connection(const char* portnumber) {
     return sockfd;
 }
 
-int handle_connections(int sockfd) {
+int handle_connections(int sockfd)
+{
     int pid = 0;
     struct sockaddr_storage addr_inf;
     socklen_t socklen = sizeof(addr_inf);
     int connfd = 0;
 
-    while (1) {
-        if ((connfd = accept(sockfd, (struct sockaddr*) &addr_inf, &socklen)) < 0) {
+    while (1)
+    {
+        if ((connfd = accept(sockfd, (struct sockaddr*) &addr_inf, &socklen)) < 0)
+        {
             print_error("error when trying to accept client connection\n");
             continue;
         }
@@ -355,7 +373,8 @@ int handle_connections(int sockfd) {
         (void) fprintf(stdout, "listening socket: %d\n", sockfd);
         (void) fprintf(stdout, "connected socket: %d\n", connfd);
 
-        if ((pid = fork()) < 0) {
+        if ((pid = fork()) < 0)
+        {
             print_error("error when forking\n");
             (void) close(sockfd);
             (void) close(connfd);
@@ -363,7 +382,8 @@ int handle_connections(int sockfd) {
         }
         (void) fprintf(stdout, "forking worked\n");
         /* code, executed by the child process */
-        if (!pid) {
+        if (!pid)
+        {
             /* child process doesn't need listening socket */
             (void) close(sockfd);
 
@@ -389,12 +409,12 @@ int handle_connections(int sockfd) {
             close(1); /* close standard output */
             close(2); /* close standard error  */
 
-            if (dup(connfd) != 0 || dup(connfd) != 1 || dup(connfd) != 2) {
+            if (dup(connfd) != 0 || dup(connfd) != 1 || dup(connfd) != 2)
+            {
                 /*
                  * ### FB_CF: Fehlermeldungen beinhalten nicht argv[0]
                  */
-                (void) fprintf(stdout,
-                        "error duplicating socket for stdin/stdout/stderr");
+                (void) fprintf(stdout, "error duplicating socket for stdin/stdout/stderr");
                 (void) close(connfd);
                 return -1;
             }
@@ -403,7 +423,8 @@ int handle_connections(int sockfd) {
              * this should overlay the simple_message_server_logic
              * over the child process
              */
-            if (execl(LOGIC_PATH, LOGIC_NAME, (char*) NULL) < 0) {
+            if (execl(LOGIC_PATH, LOGIC_NAME, (char*) NULL) < 0)
+            {
                 /*
                  * can't print error message, because stdout is already the socket fd.
                  * so the client would get the error message.
@@ -416,7 +437,9 @@ int handle_connections(int sockfd) {
             return 0;
 
             /* code, executed by the server process */
-        } else {
+        }
+        else
+        {
             /*
              * if an error occurs when trying to close the listening socket in the parent process,
              * it can be ignored
