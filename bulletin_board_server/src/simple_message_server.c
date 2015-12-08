@@ -44,13 +44,13 @@ static const char* sprogram_arg0 = NULL;
 /* === prototypes =========================================================== */
 
 char* param_check(int argc, char **argv);
-void killZombies(int signal);
-int regSigHandler(void);
-int handleConnections(int sockfd);
+void kill_zombies(int signal);
+int reg_sig_handler(void);
+int handle_connections(int sockfd);
 static void print_error(const char* message, ...);
 static void print_usage(FILE* file, const char* message, int exit_code);
 //static void cleanup(bool exit);
-static int setUpConnection(const char* portnumber);
+static int set_up_connection(const char* portnumber);
 
 
 /* === globals ============================================================== */
@@ -79,13 +79,13 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    if ((sockfd = setUpConnection(server_port)) < 0) {
+    if ((sockfd = set_up_connection(server_port)) < 0) {
         return EXIT_FAILURE;
     }
-    if (regSigHandler() < 0) {
+    if (reg_sig_handler() < 0) {
         return EXIT_FAILURE;
     }
-    if (handleConnections(sockfd) < 0) {
+    if (handle_connections(sockfd) < 0) {
         return EXIT_FAILURE;
     }
 
@@ -217,7 +217,7 @@ char* param_check(int argc, char **argv) {
                    return EXIT_FAILURE;
                }
 
-               if (port_nr < LOWER_PORT_RANGE && port_nr > UPPER_PORT_RANGE)
+               if (port_nr < LOWER_PORT_RANGE || port_nr > UPPER_PORT_RANGE)
                {
                    print_error("Port number out of range.");
                    print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
@@ -248,9 +248,9 @@ char* param_check(int argc, char **argv) {
     return portstr;
 }
 
-int regSigHandler(void) {
+int reg_sig_handler(void) {
     struct sigaction sig;
-    sig.sa_handler = killZombies;
+    sig.sa_handler = kill_zombies;
     /*
      * excludes all signals from the signal handler mask
      * returns always 0, so return value can be ignored.
@@ -264,7 +264,7 @@ int regSigHandler(void) {
 /**
  * \brief knifes all the zombies
  */
-void killZombies(int signal) {
+void kill_zombies(int signal) {
     /*
      * waitpid waits for information about child-processes
      * (pid_t)(-1) means, status is requested for any child process
@@ -278,7 +278,7 @@ void killZombies(int signal) {
 }
 
 
-static int setUpConnection(const char* portnumber) {
+static int set_up_connection(const char* portnumber) {
     int sockfd = 0;
     struct addrinfo hints;
     struct addrinfo *result, *rp;
@@ -340,7 +340,7 @@ static int setUpConnection(const char* portnumber) {
     return sockfd;
 }
 
-int handleConnections(int sockfd) {
+int handle_connections(int sockfd) {
     int pid = 0;
     struct sockaddr_storage addr_inf;
     socklen_t socklen = sizeof(addr_inf);
