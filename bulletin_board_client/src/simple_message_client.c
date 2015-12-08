@@ -33,6 +33,7 @@
 #include <simple_message_client_commandline_handling.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <assert.h>
 
 /*
  * ---------------------------------------------------------------- defines --
@@ -62,7 +63,7 @@
  */
 
 /*
- * --------------------------------------------------------------- static --
+ * ----------------------------------------------------------------- static --
  */
 
 /** Maximum filename length of file system. */
@@ -200,8 +201,10 @@ static int init(const char** program_args)
  */
 static void cleanup(bool exit_program)
 {
+    VERBOSE("Cleanup.");
 
-    (void) fflush(stderr); /* do not handle erros here */
+    (void) fflush(stderr); /* do not handle errors
+     here */
     (void) fflush(stdout);
 
     if (exit_program)
@@ -314,17 +317,17 @@ static void verbose(const char* file_name, const char* function_name, int line,
     }
 }
 
-    /**
-     * \brief Executes the request and get the response from server.
-     *
-     * /param server address.
-     * /param port of server.
-     * /param user which wrote the message.
-     * /param message to be shown in bulletin board.
-     * /param image_url URL of image or NULL.
-     *
-     * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
-     */
+/**
+ * \brief Executes the request and get the response from server.
+ *
+ * /param server address.
+ * /param port of server.
+ * /param user which wrote the message.
+ * /param message to be shown in bulletin board.
+ * /param image_url URL of image or NULL.
+ *
+ * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
+ */
 static int execute(const char* server, const char* port, const char* user,
     const char* message, const char* image_url)
 {
@@ -339,6 +342,8 @@ static int execute(const char* server, const char* port, const char* user,
     struct sockaddr_in6* s6;
     int read_result;
     int close_result;
+
+    VERBOSE("Execute request.");
 
     /* Obtain address(es) matching host/port */
     memset(&hints, 0, sizeof(struct addrinfo));
@@ -358,7 +363,6 @@ static int execute(const char* server, const char* port, const char* user,
      Try each address until we successfully connect(2).
      If socket(2) (or connect(2)) fails, we (close the socket
      and) try the next address. */
-
     for (info = addr_result; info != NULL; info = info->ai_next)
     {
         socket_fd = socket(info->ai_family, info->ai_socktype,
@@ -367,7 +371,7 @@ static int execute(const char* server, const char* port, const char* user,
             continue;
 
         if (connect(socket_fd, info->ai_addr, info->ai_addrlen) != -1)
-            break; /* got a filedesriptor, success */
+            break; /* got a filedescriptor, success */
 
         close_result = close(socket_fd);
         if (close_result < 0)
@@ -399,6 +403,7 @@ static int execute(const char* server, const char* port, const char* user,
         break;
     default:
         /* oh no, this should not happen */
+        /* which in_addr is to set here? */
         print_error("Unknown address family: %d.", info->ai_family);
         freeaddrinfo(addr_result);
         close_result = close(socket_fd);
@@ -406,6 +411,7 @@ static int execute(const char* server, const char* port, const char* user,
         {
             print_error("Could not close socket: %s", strerror(errno));
         }
+        assert(0); /* mandatory due to our C rules */
         return EXIT_FAILURE;
 
     }
@@ -416,7 +422,7 @@ static int execute(const char* server, const char* port, const char* user,
     }
     else
     {
-        VERBOSE("Connection to %s (%s) on port %s established!", server,
+        VERBOSE("Connection to %s (%s) on port %s established.", server,
             straddr, port);
     }
 
@@ -463,6 +469,9 @@ static int send_request(const char* user, const char* message,
     size_t len;
     char* send_buf;
     char* destination;
+    ssize_t written;
+    ssize_t to_be_written;
+    char* current_write_pos;
 
     len_user = strlen(SET_USER);
     len_user_data = strlen(user) + 1; /* + 1 for 0xa terminator */
@@ -503,13 +512,22 @@ static int send_request(const char* user, const char* message,
         ++destination;
     }
     strncpy(destination, message, len_message);
-    /** @TODO write blockwise */
-    if (write(socket_fd, send_buf, len) != (ssize_t) len)
+    current_write_pos = send_buf;
+    to_be_written = len;
+    while (to_be_written  > 0)
     {
-        print_error("partial/failed write.");
-        free(send_buf);
-        return EXIT_FAILURE;
+        written = write(socket_fd, current_write_pos, to_be_written);
+        if (written < 0)
+        {
+            print_error("Could not write request: %s", strerror(errno));
+            free(send_buf);
+            return EXIT_FAILURE;
+        }
+        current_write_pos += written;
+        to_be_written -= written;
     }
+    VERBOSE("Send request of %ld bytes successful.", (long ) len);
+
     if (0 != shutdown(socket_fd, SHUT_WR)) /* no more writes */
     {
         print_error("Could not shutdown write connection: %s", strerror(errno));
@@ -638,13 +656,13 @@ static int read_response(int socket_fd)
                 {
                     /* message is too short */
                     finished = true;
-                    print_error("Malformed response (status).");
+                    print_error("Malformed response (too short).");
                     continue;
                 }
                 if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
                 {
                     finished = true;
-                    print_error("Malformed response (status).");
+                    print_error("Malformed response (status not found).");
                     continue;
                 }
                 /* search for linefeed */
@@ -653,14 +671,14 @@ static int read_response(int socket_fd)
                 if (found == search)
                 {
                     finished = true;
-                    print_error("Malformed response (status).");
+                    print_error("Malformed response (status nr missing).");
                     continue;
                 }
                 if (found == (parse_buf + amount))
                 {
                     /* not found */
                     finished = true;
-                    print_error("Malformed response (status).");
+                    print_error("Malformed response (status nr missing).");
                     continue;
                 }
                 *found = '\0'; /* make a string for strtol function */ 
