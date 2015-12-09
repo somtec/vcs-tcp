@@ -38,15 +38,19 @@
 /*
  * ---------------------------------------------------------------- defines --
  */
-#define INPUT_NUM_BASE 10 /* decimal format base for strtol */
 
+/* decimal format base for strtol */
+#define INPUT_NUM_BASE 10
+
+
+/* defines for the allowed port range */
 #define LOWER_PORT_RANGE 0
 #define UPPER_PORT_RANGE 65535
 
 /* macro used for printing source line etc. in verbose function */
 #define VERBOSE(...) verbose(__FILE__, __func__, __LINE__, __VA_ARGS__)
 
-/* Defines for the request/response entries */
+/* Defines for the request/response string literals */
 #define SET_USER "user="
 #define SET_IMAGE "img="
 #define GET_STATUS "status="
@@ -63,7 +67,7 @@
  */
 
 /*
- * ----------------------------------------------------------------- static --
+ * --------------------------------------------------------------- static --
  */
 
 /** Maximum filename length of file system. */
@@ -90,6 +94,7 @@ static int send_request(const char* user, const char* message,
     const char* image_url, int socket_fd);
 static int read_response(int socket_fd);
 static char* search_terminator(char* start, char* end);
+static int convert_server_status(char* start, char* end, int* server_status);
 
 /*
  * -------------------------------------------------------------- functions --
@@ -141,7 +146,7 @@ int main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (port_nr < LOWER_PORT_RANGE && port_nr > UPPER_PORT_RANGE)
+    if (port_nr < LOWER_PORT_RANGE || port_nr > UPPER_PORT_RANGE)
     {
         print_error("Port number out of range.");
         print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
@@ -201,10 +206,8 @@ static int init(const char** program_args)
  */
 static void cleanup(bool exit_program)
 {
-    VERBOSE("Cleanup.");
 
-    (void) fflush(stderr); /* do not handle errors
-     here */
+    (void) fflush(stderr); /* do not handle erros here */
     (void) fflush(stdout);
 
     if (exit_program)
@@ -343,8 +346,6 @@ static int execute(const char* server, const char* port, const char* user,
     int read_result;
     int close_result;
 
-    VERBOSE("Execute request.");
-
     /* Obtain address(es) matching host/port */
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_UNSPEC; /* Allow IPv4 or IPv6 */
@@ -363,6 +364,7 @@ static int execute(const char* server, const char* port, const char* user,
      Try each address until we successfully connect(2).
      If socket(2) (or connect(2)) fails, we (close the socket
      and) try the next address. */
+
     for (info = addr_result; info != NULL; info = info->ai_next)
     {
         socket_fd = socket(info->ai_family, info->ai_socktype,
@@ -371,7 +373,7 @@ static int execute(const char* server, const char* port, const char* user,
             continue;
 
         if (connect(socket_fd, info->ai_addr, info->ai_addrlen) != -1)
-            break; /* got a filedescriptor, success */
+            break; /* got a filedesriptor, success */
 
         close_result = close(socket_fd);
         if (close_result < 0)
@@ -422,7 +424,7 @@ static int execute(const char* server, const char* port, const char* user,
     }
     else
     {
-        VERBOSE("Connection to %s (%s) on port %s established.", server,
+        VERBOSE("Connection to %s (%s) on port %s established!", server,
             straddr, port);
     }
 
@@ -487,7 +489,7 @@ static int send_request(const char* user, const char* message,
         len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
     }
     len = len_user + len_user_data + len_image + len_image_url + len_message;
-    VERBOSE("Send request of %ld bytes.", (long ) len);
+    VERBOSE("Send request of %ld bytes.", (long) len);
 
     send_buf = malloc(len * sizeof(char));
     if (send_buf == NULL)
@@ -526,7 +528,7 @@ static int send_request(const char* user, const char* message,
         current_write_pos += written;
         to_be_written -= written;
     }
-    VERBOSE("Send request of %ld bytes successful.", (long ) len);
+    VERBOSE("Send request of %ld bytes successful.", (long) len);
 
     if (0 != shutdown(socket_fd, SHUT_WR)) /* no more writes */
     {
@@ -557,21 +559,22 @@ static int read_response(int socket_fd)
     int result;
     size_t read_size;
     bool expect_status = true;
-    //bool expect_html_file = false;
+    bool expect_html_file = false;
     char* current_write_pos;
     size_t amount;
     //size_t parse_amount;
     size_t len_status;
-    //size_t len_file;
+    size_t len_file;
     // int number_of_files = 0;
     char* search;
     char* found;
-    long int server_status;
-    char* end_ptr;
+    int server_status;
     size_t move;
+    bool receive_status = true;
+   //bool receive_html = true;
 
     len_status = strlen(GET_STATUS);
-    //len_file = strlen(GET_FILE);
+    len_file = strlen(GET_FILE);
 
     read_size = smax_filename + 1;
 
@@ -638,16 +641,21 @@ static int read_response(int socket_fd)
             finished = true;
             /* end of file */
         }
-        VERBOSE("Received %ld bytes.", (long ) read_count);
+        VERBOSE("Received %ld bytes.", (long) read_count);
 
         if (expect_status)
-        {
+         {
+
+            if (receive_status)
+            {
+                VERBOSE("Receiving status.");
+                receive_status = false;
+            }
             if (read_count > 0)
             {
                 memcpy(current_write_pos, read_buf, read_count);
                 current_write_pos += read_count;
             }
-
             if (finished || (amount >= read_size))
             {
                 /* it must contain the status= string now */
@@ -662,7 +670,7 @@ static int read_response(int socket_fd)
                 if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
                 {
                     finished = true;
-                    print_error("Malformed response (status not found).");
+                    print_error("Malformed response (no status).");
                     continue;
                 }
                 /* search for linefeed */
@@ -671,49 +679,33 @@ static int read_response(int socket_fd)
                 if (found == search)
                 {
                     finished = true;
-                    print_error("Malformed response (status nr missing).");
+                    print_error("Malformed response (no status nr).");
                     continue;
                 }
                 if (found == (parse_buf + amount))
                 {
                     /* not found */
                     finished = true;
-                    print_error("Malformed response (status nr missing).");
+                    print_error("Malformed response (no status terminator).");
                     continue;
                 }
-                *found = '\0'; /* make a string for strtol function */ 
-                errno = 0;
-                server_status = strtol(search, &end_ptr, 10);
-                if ((errno == ERANGE && (server_status == LONG_MAX || server_status == LONG_MIN))
-                    || (errno != 0 && server_status == 0))
+                if (EXIT_SUCCESS != convert_server_status(search, found, &server_status))
                 {
-                    print_error("Can not convert server status (%s).", strerror(errno));
-                    return EXIT_FAILURE;
-                }
-
-                if (end_ptr == search)
-                {
-                    print_error("No digits were found.");
-                    return EXIT_FAILURE;
-                }
-
-                if (server_status < INT_MIN && server_status > INT_MAX)
-                {
-                    print_error("Server status exceeds int size: %l.", server_status);
-                    /* cast the result later */
+                    finished = true;
+                    continue;
                 }
                 expect_status = false;
-                //expect_html_file = true;
-                move = (end_ptr - parse_buf + 1);
+                VERBOSE("Received status.");
+                expect_html_file = true;
+                move = (found - parse_buf + 1);
                 if (amount > move)
                 {
-                    memmove(parse_buf, end_ptr + 1, amount - move);
+                    memmove(parse_buf, found + 1, amount - move);
                     amount -= move;
                     current_write_pos = parse_buf + amount; 
                 }
-
             }
-            if (expect_status)
+            else
             {
                 if (amount < (len_status + 2))
                  {
@@ -740,37 +732,63 @@ static int read_response(int socket_fd)
                      /* not found */
                      continue;
                  }
-                 *found = '\0'; /* make a string for strtol function */ 
-                 errno = 0;
-                 server_status = strtol(search, &end_ptr, 10);
-                 if ((errno == ERANGE && (server_status == LONG_MAX || server_status == LONG_MIN))
-                     || (errno != 0 && server_status == 0))
+                 if (convert_server_status(search, found, &server_status)
+                     != EXIT_SUCCESS)
                  {
-                     print_error("Can not convert server status (%s).", strerror(errno));
-                     return EXIT_FAILURE;
-                 }
-
-                 if (end_ptr == search)
-                 {
-                     print_error("No digits were found.");
-                     return EXIT_FAILURE;
-                 }
-
-                 if (server_status < INT_MIN && server_status > INT_MAX)
-                 {
-                     print_error("Server status exceeds int size: %l.", server_status);
-                     /* cast the result later */
+                     finished = true;
+                     continue;
                  }
                  expect_status = false;
-                 //expect_html_file = true;
-                 move = (end_ptr - parse_buf + 1);
+                 VERBOSE("Received status.");
+                 expect_html_file = true;
+                 move = (found - parse_buf + 1);
                  if (amount > move)
                  {
-                     memmove(parse_buf, end_ptr + 1, amount - move);
+                     memmove(parse_buf, found + 1, amount - move);
                      amount -= move;
                      current_write_pos = parse_buf + amount; 
                  }
             }
+        }
+        if (expect_html_file)
+        {
+
+            VERBOSE("Receiv}e HTML response file.");
+            if (finished || (amount >= read_size))
+            {
+                /* it must contain the file= string now */
+
+                if (amount < (len_file + 2))
+                {
+                    /* message is too short */
+                    finished = true;
+                    print_error("Malformed response (too short).");
+                    continue;
+                }
+                if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
+                {
+                    finished = true;
+                    print_error("Malformed response (no status).");
+                    continue;
+                }
+                /* search for linefeed */
+                search = parse_buf + len_status;
+                found = search_terminator(search, parse_buf + amount);
+                if (found == search)
+                {
+                    finished = true;
+                    print_error("Malformed response (no status nr).");
+                    continue;
+                }
+                if (found == (parse_buf + amount))
+                {
+                    /* not found */
+                    finished = true;
+                    print_error("Malformed response (no status terminator).");
+                    continue;
+                }
+            }
+
         }
     }
     free(read_buf);
@@ -801,5 +819,49 @@ static char* search_terminator(char* start, char* end)
         ++search;
     }
     return search;
+
+}
+/**
+ * \brief searches the terminator character.
+ *
+ * \param start where to start the number begings.
+ * \param end marker contains newline.
+ * \server_status converted server status as number.
+ *
+ * \return EXIT_SUCCESS if server status was converted, else EXIT_FAILURE.
+ */
+static int convert_server_status(char* start, char* end, int* server_status)
+{
+    long int result;
+    char* end_strtol;
+
+    *end = '\0'; /* make a string for strtol function */
+    errno = 0;
+    result = strtol(start, &end_strtol, INPUT_NUM_BASE);
+    if ((errno == ERANGE && (result == LONG_MAX || result == LONG_MIN))
+        || (errno != 0 && result == 0))
+    {
+        print_error("Can not convert server status (%s).", strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+    if (end_strtol == start)
+    {
+        print_error("No digits were found.");
+        return EXIT_FAILURE;
+    }
+
+    if (result < INT_MIN || result > INT_MAX)
+    {
+        print_error("Server status exceeds int size: %l.", result);
+        /* make result clearly a failure */
+        *server_status = EXIT_FAILURE;
+    }
+    else
+    {
+        *server_status = (int)result;
+    }
+
+    return EXIT_SUCCESS;
 
 }
