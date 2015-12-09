@@ -12,7 +12,9 @@
  *
  */
 
-/* === includes ============================================================= */
+/*
+ * --------------------------------------------------------------- includes --
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -28,7 +30,9 @@
 #include <limits.h>
 #include <stdarg.h>
 
-/* === defines ============================================================== */
+/*
+ * ---------------------------------------------------------------- defines --
+ */
 
 #define INPUT_NUM_BASE 10 /* decimal format base for strtol */
 
@@ -37,13 +41,21 @@
 #define CONN_COUNT 10
 #define LOGIC_NAME "simple_message_server_logic"
 #define LOGIC_PATH "/usr/local/bin/simple_message_server_logic"
-/* === static ============================================================== */
-/** Current program arguments. */
+
+/*
+ * ---------------------------------------------------------------- globals --
+ */
+
+/*
+ * ----------------------------------------------------------------- static --
+ */
 static const char* sprogram_arg0 = NULL;
 
-/* === prototypes =========================================================== */
+/*
+ * ------------------------------------------------------------- prototypes --
+ */
+static void param_check(int argc, char** argv, char** port_nr);
 
-char* param_check(int argc, char **argv);
 void kill_zombies(int signal);
 int reg_sig_handler(void);
 int handle_connections(int sockfd);
@@ -52,9 +64,9 @@ static void print_usage(FILE* file, const char* message, int exit_code);
 /*static void cleanup(bool exit);*/
 static int set_up_connection(const char* portnumber);
 
-/* === globals ============================================================== */
-
-/* === functions ============================================================ */
+/*
+ * -------------------------------------------------------------- functions --
+ */
 
 /**
  * \brief the main method for the server
@@ -69,11 +81,11 @@ static int set_up_connection(const char* portnumber);
 int main(int argc, char** argv)
 {
     /* server port with type short int which is needed by the htons function */
-    char* server_port = 0;
+    char* server_port = NULL;
     int sockfd = 0;
 
     /* calling the getopt function to get portnum*/
-    server_port = param_check(argc, argv);
+    param_check(argc, argv, &server_port);
     if (server_port == NULL)
     {
         return EXIT_FAILURE;
@@ -92,9 +104,8 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    /*
-     * ### FB_CF: Dead Code
-     */
+    /* should never come here */
+    assert(0);
 
     return EXIT_SUCCESS;
 }
@@ -143,12 +154,9 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written = fprintf(stream, "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
+    written = fprintf(stream,
+            "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
             "  -p, --port <port>       well-known port of the server [0..65535]\n"
-            "  -u, --user <name>       name of the posting user\n"
-            "  -i, --image <URL>       URL pointing to an image of the posting user\n"
-            "  -m, --message <message> message to be added to the bulletin board\n"
-            "  -v, --verbose           verbose output\n"
             "  -h, --help\n");
     if (written < 0)
     {
@@ -183,23 +191,23 @@ static void cleanup(bool exit_program)
 /**
  * \brief the method for checking the passed parameters
  *
+ * This functions calls exit indirectly when passed parameters are invalid.
+ *
  * \param argc the number of arguments
  * \param argv the arguments itselves (including the program name in argv[0])
- *
- * \return the portnumber
- * \retval -1 if wrong arguments are passed, otherwise the portnumber which is given with the -p argument
+ * \param port_str resulting port string for further usage
  *
  */
-char* param_check(int argc, char **argv)
+void param_check(int argc, char **argv, char** port_str)
 {
     char* end_ptr;
     long int port_nr = 0;
-    char* port_str = NULL;
     int c;
     int param_error = 0;
 
     opterr = 0;
 
+    *port_str = NULL;
     if (argc < 3)
     {
         print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
@@ -214,13 +222,13 @@ char* param_check(int argc, char **argv)
             if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN)) || (errno != 0 && port_nr == 0))
             {
                 print_error("Can not convert port number (%s).", strerror(errno));
-                return EXIT_FAILURE;
+                print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
             }
 
             if (end_ptr == optarg)
             {
                 print_error("No digits were found.");
-                return EXIT_FAILURE;
+                print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
             }
 
             if (port_nr < LOWER_PORT_RANGE || port_nr > UPPER_PORT_RANGE)
@@ -228,7 +236,7 @@ char* param_check(int argc, char **argv)
                 print_error("Port number out of range.");
                 print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
             }
-            port_str = optarg;
+            *port_str = optarg;
             break;
         case 'h':
             /* when the usage message is requested, program will exit afterwards */
@@ -250,11 +258,16 @@ char* param_check(int argc, char **argv)
     if (param_error == 1)
     {
         print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
-        return NULL;
     }
-    return port_str;
+    return;
 }
 
+/**
+ * \brief Installs signal handler for killing my child zombies.
+ *
+ * \return The return value is zero if it succeeds, and -1 on failure.
+ * The following errno error conditions are defined for this function: EINVAL
+ */
 int reg_sig_handler(void)
 {
     struct sigaction sig;
@@ -266,6 +279,7 @@ int reg_sig_handler(void)
     (void) sigemptyset(&sig.sa_mask);
     sig.sa_flags = SA_RESTART;
 
+    errno = 0;
     return sigaction(SIGCHLD, &sig, NULL);
 }
 
@@ -338,7 +352,7 @@ static int set_up_connection(const char* portnumber)
     /* no address succeeded */
     if (rp == NULL)
     {
-        print_error("error bin\n");
+        print_error("error bind\n");
         return -1;
     }
 
@@ -380,10 +394,10 @@ int handle_connections(int sockfd)
             (void) close(connfd);
             return -1;
         }
-        (void) fprintf(stdout, "forking worked\n");
         /* code, executed by the child process */
         if (!pid)
         {
+            (void) fprintf(stdout, "forking worked\n");
             /* child process doesn't need listening socket */
             (void) close(sockfd);
 
@@ -414,7 +428,7 @@ int handle_connections(int sockfd)
                 /*
                  * ### FB_CF: Fehlermeldungen beinhalten nicht argv[0]
                  */
-                (void) fprintf(stdout, "error duplicating socket for stdin/stdout/stderr");
+                print_error("error duplicating socket for stdin/stdout/stderr");
                 (void) close(connfd);
                 return -1;
             }
@@ -448,10 +462,8 @@ int handle_connections(int sockfd)
         }
     }
 
-    /*
-     * ### FB_CF: Dead Code
-     */
-
-    return 0;
+    /* never come here, need return value for compiler */
+    assert(0);
+    return EXIT_FAILURE;
 }
 /* === EOF ================================================================== */
