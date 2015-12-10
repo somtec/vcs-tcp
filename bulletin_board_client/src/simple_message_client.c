@@ -55,6 +55,7 @@
 #define SET_IMAGE "img="
 #define GET_STATUS "status="
 #define GET_FILE "file="
+#define GET_LEN "len="
 
 /* Define for the request field terminator */
 #define FIELD_TERMINATOR '\n'
@@ -95,13 +96,14 @@ static int send_request(const char* user, const char* message,
 static int read_response(int socket_fd);
 static char* search_terminator(char* start, char* end);
 static int convert_server_status(char* start, char* end, int* server_status);
+int check_text(size_t amount, char* text, char* parse_buf);
 
 /*
  * -------------------------------------------------------------- functions --
  */
 
 /**
- * @brief       Main function
+ * @brief main function
  *
  * This function is the main entry point of the program. 
  * it opens a connection to specified server and sends and receives data
@@ -186,11 +188,19 @@ static int init(const char** program_args)
     VERBOSE("Initialize program.");
 
     /* get maximum filename size */
+    errno = 0;
     smax_filename = pathconf(".", _PC_NAME_MAX);
     if (-1 == smax_filename)
     {
         smax_filename = 0;
-        print_error("pathconf() failed: %s.", strerror(errno));
+        if (errno != 0)
+        {
+        	print_error("pathconf() failed: %s.", strerror(errno));
+        }
+        else
+        {
+        	print_error("Could not determine maximum filename length.");
+        }
         return EXIT_FAILURE;
     }
 
@@ -370,10 +380,15 @@ static int execute(const char* server, const char* port, const char* user,
         socket_fd = socket(info->ai_family, info->ai_socktype,
             info->ai_protocol);
         if (socket_fd == -1)
+        {
             continue;
+        }
 
         if (connect(socket_fd, info->ai_addr, info->ai_addrlen) != -1)
-            break; /* got a filedesriptor, success */
+        {
+        	/* got a file descriptor, success */
+            break;
+        }
 
         close_result = close(socket_fd);
         if (close_result < 0)
@@ -540,6 +555,7 @@ static int send_request(const char* user, const char* message,
     return EXIT_SUCCESS;
 }
 
+
 /**
  * /brief Read response from server.
  *
@@ -562,9 +578,6 @@ static int read_response(int socket_fd)
     bool expect_html_file = false;
     char* current_write_pos;
     size_t amount;
-    //size_t parse_amount;
-    size_t len_status;
-    size_t len_file;
     // int number_of_files = 0;
     char* search;
     char* found;
@@ -572,9 +585,10 @@ static int read_response(int socket_fd)
     size_t move;
     bool receive_status = true;
    //bool receive_html = true;
-
-    len_status = strlen(GET_STATUS);
-    len_file = strlen(GET_FILE);
+    bool search_filename = true;
+    bool search_end;
+    bool buffer_full;
+    char* filename_buf;
 
     read_size = smax_filename + 1;
 
@@ -593,6 +607,15 @@ static int read_response(int socket_fd)
         print_error(strerror(ENOMEM));
         return EXIT_FAILURE;
     }
+    filename_buf = malloc(read_size * sizeof(char));
+    if (filename_buf == NULL)
+    {
+        free(read_buf);
+        free(parse_buf);
+        print_error("Can not allocate filename buffer: %s.", strerror(ENOMEM));
+        return EXIT_FAILURE;
+    }
+    filename_buf[0] = '\0';
 
     /* Initialize the file descriptor set. */
     FD_ZERO(&set);
@@ -601,15 +624,12 @@ static int read_response(int socket_fd)
     result = EXIT_FAILURE;
     current_write_pos = parse_buf;
     amount = 0;
-    //parse_amount = 0;
 
     while (!finished)
     {
         /* Initialize the timeout data structure. */
         timeout.tv_sec = SOCKET_TIMEOUT;
         timeout.tv_usec = 0;
-
-        /* select returns 0 if timeout, 1 if input available, -1 if error. */
         /* wait a user defined time for socket to become ready */
         ready = select(socket_fd + 1, &set, NULL, NULL, &timeout);
         if (ready < 0)
@@ -642,39 +662,32 @@ static int read_response(int socket_fd)
             /* end of file */
         }
         VERBOSE("Received %ld bytes.", (long) read_count);
+        buffer_full = finished || (amount >= read_size);
+        if (read_count > 0)
+        {
+            /* copy the read bytes into the parse buffer */
+            memcpy(current_write_pos, read_buf, read_count);
+            current_write_pos += read_count;
+        }
 
         if (expect_status)
          {
-
             if (receive_status)
             {
                 VERBOSE("Receiving status.");
                 receive_status = false;
             }
-            if (read_count > 0)
-            {
-                memcpy(current_write_pos, read_buf, read_count);
-                current_write_pos += read_count;
-            }
-            if (finished || (amount >= read_size))
+            if (buffer_full)
             {
                 /* it must contain the status= string now */
+				if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
+				{
+				    finished = true;
+				    continue;
+				}
 
-                if (amount < (len_status + 2))
-                {
-                    /* message is too short */
-                    finished = true;
-                    print_error("Malformed response (too short).");
-                    continue;
-                }
-                if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
-                {
-                    finished = true;
-                    print_error("Malformed response (no status).");
-                    continue;
-                }
-                /* search for linefeed */
-                search = parse_buf + len_status;
+                /* search for line feed */
+                search = parse_buf + strlen(GET_STATUS);
                 found = search_terminator(search, parse_buf + amount);
                 if (found == search)
                 {
@@ -698,28 +711,29 @@ static int read_response(int socket_fd)
                 VERBOSE("Received status.");
                 expect_html_file = true;
                 move = (found - parse_buf + 1);
-                if (amount > move)
+                if (move > 0)
                 {
                     memmove(parse_buf, found + 1, amount - move);
                     amount -= move;
-                    current_write_pos = parse_buf + amount; 
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = finished || (amount >= read_size);
                 }
             }
             else
             {
-                if (amount < (len_status + 2))
+                 if (amount < (strlen(GET_STATUS) + 2))
                  {
                      /* message is too short */
                      continue;
                  }
-                 if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
+                 /* it must contain the status= string now */
+                 if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
                  {
                      finished = true;
-                     print_error("Malformed response (status).");
                      continue;
                  }
-                 /* search for linefeed */
-                 search = parse_buf + len_status;
+                 /* search for line feed */
+                 search = parse_buf + strlen(GET_STATUS);
                  found = search_terminator(search, parse_buf + amount);
                  if (found == search)
                  {
@@ -742,57 +756,146 @@ static int read_response(int socket_fd)
                  VERBOSE("Received status.");
                  expect_html_file = true;
                  move = (found - parse_buf + 1);
-                 if (amount > move)
+                 if (move > 0)
                  {
                      memmove(parse_buf, found + 1, amount - move);
                      amount -= move;
-                     current_write_pos = parse_buf + amount; 
+                     current_write_pos = parse_buf + amount;
+                     buffer_full = finished || (amount >= read_size);
+                 }
+                 if (!finished && (amount == 0))
+                 {
+                     continue;
                  }
             }
         }
         if (expect_html_file)
         {
-
-            VERBOSE("Receiv}e HTML response file.");
-            if (finished || (amount >= read_size))
+            VERBOSE("Receive response file.");
+            if (buffer_full)
             {
-                /* it must contain the file= string now */
+            	if (search_filename)
+            	{
+                    /* it must contain the file= string now */
+                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    search_filename = false;
+                    move = strlen(GET_FILE);
 
-                if (amount < (len_file + 2))
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = finished || (amount >= read_size);
+                    search_end = true;
+            	}
+                if (search_end)
+                {
+                    /* search for line feed */
+                    if (filename_buf[0] == '\0')
+                    {
+                        search = parse_buf + strlen(GET_FILE);
+                    }
+                    else
+                    {
+                        search = parse_buf + strlen(GET_LEN);
+                    }
+                    found = search_terminator(search, parse_buf + amount);
+                    if (found == search)
+                    {
+                        finished = true;
+                        print_error("Malformed response.");
+                        continue;
+                    }
+                    if (found == (parse_buf + amount))
+                    {
+                        /* not found */
+                        if (buffer_full)
+                        {
+                            /* it must contain the terminator in this case */
+                            print_error("Malformed response (no html filename terminator).");
+                            finished = true;
+                            continue;
+                        }
+                        /* see if there is further data */
+                        continue;
+                    }
+                    search_end = false;
+                    /* make 0 string */
+                    *found = 0;
+                    if (filename_buf[0] == '\0')
+                    {
+                        if (found >= (parse_buf + read_size))
+                        {
+                            /* filename too long, can not store it */
+                            print_error("Filename too long.");
+                            finished = true;
+                            continue;
+                        }
+                        strcpy(filename_buf, parse_buf);
+                        move = strlen(filename_buf) + 1;
+                        memmove(parse_buf, parse_buf + move, amount - move);
+                        amount -= move;
+                        current_write_pos = parse_buf + amount;
+                        buffer_full = finished || (amount >= read_size);
+
+                    }
+                }
+            }
+            else
+            {
+                if (amount < (strlen(GET_FILE) + 2))
                 {
                     /* message is too short */
-                    finished = true;
-                    print_error("Malformed response (too short).");
                     continue;
                 }
-                if (strncmp(GET_STATUS, parse_buf, len_status) != 0)
+                if (search_filename)
                 {
-                    finished = true;
-                    print_error("Malformed response (no status).");
-                    continue;
+                    /* it must contain the file= string now */
+                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    search_filename = false;
+                    move = strlen(GET_FILE);
+
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
                 }
+
                 /* search for linefeed */
-                search = parse_buf + len_status;
+                search = parse_buf;
                 found = search_terminator(search, parse_buf + amount);
                 if (found == search)
                 {
                     finished = true;
-                    print_error("Malformed response (no status nr).");
+                    print_error("Malformed response (status).");
                     continue;
                 }
                 if (found == (parse_buf + amount))
                 {
                     /* not found */
-                    finished = true;
-                    print_error("Malformed response (no status terminator).");
                     continue;
                 }
+
+                if (convert_server_status(search, found, &server_status)
+                    != EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
+                expect_status = false;
             }
 
         }
     }
     free(read_buf);
     free(parse_buf);
+    free(filename_buf);
 
     return result;
 
@@ -821,6 +924,7 @@ static char* search_terminator(char* start, char* end)
     return search;
 
 }
+
 /**
  * \brief searches the terminator character.
  *
@@ -863,5 +967,33 @@ static int convert_server_status(char* start, char* end, int* server_status)
     }
 
     return EXIT_SUCCESS;
-
 }
+
+/**
+ * /brief Checks if response field is correct.
+ *
+ * /param amount of bytes in parse_buf.
+ * /param text to be checked against parse_buf.
+ * /param parse_buf where to find text.
+ *
+ * /return EXIT_SUCCESS if text is in response, else EXIT_FAILURE.
+ */
+int check_text(size_t amount, char* text, char* parse_buf)
+{
+    size_t len;
+    len = strlen(text);
+
+    /* it must contain the status= string now */
+    if (amount < (len + 2)) {
+        /* message is too short */
+        print_error("Malformed response (too short %s).", text);
+        EXIT_FAILURE;
+    }
+    if (strncmp(GET_STATUS, parse_buf, len) != 0)
+    {
+        print_error("Malformed response (no %s).", text);
+        EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
