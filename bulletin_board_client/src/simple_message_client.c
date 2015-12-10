@@ -10,9 +10,8 @@
  * @date 2015/12/07
  *
  *
- * TODO store received stream on disk
- * TODO overwork read in of stream blockwise
- * TODO error handling in execute on read in
+ * TODO fix storing of png file
+ * TODO remove duplicated code
  *
  */
 
@@ -41,7 +40,6 @@
 
 /* decimal format base for strtol */
 #define INPUT_NUM_BASE 10
-
 
 /* defines for the allowed port range */
 #define LOWER_PORT_RANGE 0
@@ -88,15 +86,18 @@ static void print_error(const char* message, ...);
 static int init(const char** program_args);
 static void cleanup(bool exit);
 static void verbose(const char* file_name, const char* function_name, int line,
-    const char* message, ...);
+        const char* message, ...);
 static int execute(const char* server, const char* port, const char* user,
-    const char* message, const char* image_url);
+        const char* message, const char* image_url);
 static int send_request(const char* user, const char* message,
-    const char* image_url, int socket_fd);
+        const char* image_url, int socket_fd);
 static int read_response(int socket_fd);
 static char* search_terminator(char* start, char* end);
 static int convert_server_status(char* start, char* end, int* server_status);
+static int convert_file_size(char* start, char* end, long* size);
 int check_text(size_t amount, char* text, char* parse_buf);
+int search_end_marker(char** found, char* parse_buf, int amount,
+bool buffer_full);
 
 /*
  * -------------------------------------------------------------- functions --
@@ -131,12 +132,12 @@ int main(int argc, const char* argv[])
     sprogram_arg0 = argv[0];
 
     smc_parsecommandline(argc, argv, print_usage, &server, &port, &user,
-        &message, &img_url, &sverbose);
+            &message, &img_url, &sverbose);
 
     errno = 0;
     port_nr = strtol(port, &end_ptr, INPUT_NUM_BASE);
     if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
-        || (errno != 0 && port_nr == 0))
+            || (errno != 0 && port_nr == 0))
     {
         print_error("Can not convert port number (%s).", strerror(errno));
         return EXIT_FAILURE;
@@ -156,7 +157,7 @@ int main(int argc, const char* argv[])
 
     img_url_text = img_url == NULL ? "<no image>" : img_url;
     VERBOSE("Got parameter server %s, port %s, user %s, message %s, "
-        "image %s", server, port, user, message, img_url_text);
+            "image %s", server, port, user, message, img_url_text);
 
     /* so_REuseaddr mit setsockopt im server */
 
@@ -195,11 +196,11 @@ static int init(const char** program_args)
         smax_filename = 0;
         if (errno != 0)
         {
-        	print_error("pathconf() failed: %s.", strerror(errno));
+            print_error("pathconf() failed: %s.", strerror(errno));
         }
         else
         {
-        	print_error("Could not determine maximum filename length.");
+            print_error("Could not determine maximum filename length.");
         }
         return EXIT_FAILURE;
     }
@@ -271,14 +272,15 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written = fprintf(stream,
-      "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
-      "  -p, --port <port>       well-known port of the server [0..65535]\n"
-      "  -u, --user <name>       name of the posting user\n"
-      "  -i, --image <URL>       URL pointing to an image of the posting user\n"
-      "  -m, --message <message> message to be added to the bulletin board\n"
-      "  -v, --verbose           verbose output\n"
-      "  -h, --help\n");
+    written =
+            fprintf(stream,
+                    "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
+                            "  -p, --port <port>       well-known port of the server [0..65535]\n"
+                            "  -u, --user <name>       name of the posting user\n"
+                            "  -i, --image <URL>       URL pointing to an image of the posting user\n"
+                            "  -m, --message <message> message to be added to the bulletin board\n"
+                            "  -v, --verbose           verbose output\n"
+                            "  -h, --help\n");
     if (written < 0)
     {
         print_error(strerror(errno));
@@ -302,7 +304,7 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
  * \return void
  */
 static void verbose(const char* file_name, const char* function_name, int line,
-    const char* message, ...)
+        const char* message, ...)
 {
     int written;
     va_list args;
@@ -310,7 +312,7 @@ static void verbose(const char* file_name, const char* function_name, int line,
     if (sverbose > 0)
     {
         written = fprintf(stdout, "%s [%s, %s(), line %d]: ", sprogram_arg0,
-            file_name, function_name, line);
+                file_name, function_name, line);
         if (written < 0)
         {
             print_error(strerror(errno));
@@ -342,7 +344,7 @@ static void verbose(const char* file_name, const char* function_name, int line,
  * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
  */
 static int execute(const char* server, const char* port, const char* user,
-    const char* message, const char* image_url)
+        const char* message, const char* image_url)
 {
     struct addrinfo hints;
     struct addrinfo* addr_result;
@@ -378,7 +380,7 @@ static int execute(const char* server, const char* port, const char* user,
     for (info = addr_result; info != NULL; info = info->ai_next)
     {
         socket_fd = socket(info->ai_family, info->ai_socktype,
-            info->ai_protocol);
+                info->ai_protocol);
         if (socket_fd == -1)
         {
             continue;
@@ -386,7 +388,7 @@ static int execute(const char* server, const char* port, const char* user,
 
         if (connect(socket_fd, info->ai_addr, info->ai_addrlen) != -1)
         {
-        	/* got a file descriptor, success */
+            /* got a file descriptor, success */
             break;
         }
 
@@ -405,7 +407,7 @@ static int execute(const char* server, const char* port, const char* user,
         return EXIT_FAILURE;
     }
 
-    /* Determine IP family of found address */
+    /* For verbose output determine IP family of found address */
     switch (info->ai_family)
     {
     case AF_INET:
@@ -440,7 +442,7 @@ static int execute(const char* server, const char* port, const char* user,
     else
     {
         VERBOSE("Connection to %s (%s) on port %s established!", server,
-            straddr, port);
+                straddr, port);
     }
 
     freeaddrinfo(addr_result); /* No longer needed */
@@ -476,7 +478,7 @@ static int execute(const char* server, const char* port, const char* user,
  * /return EXIT_SUCCESS on success, else EXIT_FAILURE.
  */
 static int send_request(const char* user, const char* message,
-    const char* image_url, int socket_fd)
+        const char* image_url, int socket_fd)
 {
     size_t len_user;
     size_t len_user_data;
@@ -504,7 +506,7 @@ static int send_request(const char* user, const char* message,
         len_image_url = strlen(image_url) + 1; /* +1 for 0xa terminator */
     }
     len = len_user + len_user_data + len_image + len_image_url + len_message;
-    VERBOSE("Send request of %ld bytes.", (long) len);
+    VERBOSE("Send request of %ld bytes.", (long ) len);
 
     send_buf = malloc(len * sizeof(char));
     if (send_buf == NULL)
@@ -531,7 +533,7 @@ static int send_request(const char* user, const char* message,
     strncpy(destination, message, len_message);
     current_write_pos = send_buf;
     to_be_written = len;
-    while (to_be_written  > 0)
+    while (to_be_written > 0)
     {
         written = write(socket_fd, current_write_pos, to_be_written);
         if (written < 0)
@@ -543,7 +545,7 @@ static int send_request(const char* user, const char* message,
         current_write_pos += written;
         to_be_written -= written;
     }
-    VERBOSE("Send request of %ld bytes successful.", (long) len);
+    VERBOSE("Send request of %ld bytes successful.", (long ) len);
 
     if (0 != shutdown(socket_fd, SHUT_WR)) /* no more writes */
     {
@@ -554,7 +556,6 @@ static int send_request(const char* user, const char* message,
     free(send_buf);
     return EXIT_SUCCESS;
 }
-
 
 /**
  * /brief Read response from server.
@@ -575,20 +576,28 @@ static int read_response(int socket_fd)
     int result;
     size_t read_size;
     bool expect_status = true;
-    bool expect_html_file = false;
+    bool expect_file = false;
     char* current_write_pos;
     size_t amount;
-    // int number_of_files = 0;
     char* search;
     char* found;
     int server_status;
     size_t move;
     bool receive_status = true;
-   //bool receive_html = true;
     bool search_filename = true;
     bool search_end;
     bool buffer_full;
     char* filename_buf;
+    long file_size;
+    bool search_len = false;
+    bool store_file = false;
+    bool search_end2 = false;
+    FILE* store = NULL;
+    bool eof = false;
+    long written = 0;
+    long file_written;
+    int to_file;
+    bool check_further_file = false;
 
     read_size = smax_filename + 1;
 
@@ -627,51 +636,70 @@ static int read_response(int socket_fd)
 
     while (!finished)
     {
-        /* Initialize the timeout data structure. */
-        timeout.tv_sec = SOCKET_TIMEOUT;
-        timeout.tv_usec = 0;
-        /* wait a user defined time for socket to become ready */
-        ready = select(socket_fd + 1, &set, NULL, NULL, &timeout);
-        if (ready < 0)
+        if (!eof)
         {
-            /* can not handle errors or signals */
-            print_error(strerror(errno));
-            finished = true;
-            continue;
-        }
-        if (ready == 0)
-        {
-            /* timeout */
-            print_error("Timeout on receiving response.");
-            finished = true;
-            continue;
-        }
+            /* Initialize the timeout data structure. */
+            timeout.tv_sec = SOCKET_TIMEOUT;
+            timeout.tv_usec = 0;
+            /* wait a user defined time for socket to become ready */
+            ready = select(socket_fd + 1, &set, NULL, NULL, &timeout);
+            if (ready < 0)
+            {
+                /* can not handle errors or signals */
+                print_error(strerror(errno));
+                finished = true;
+                continue;
+            }
+            if (ready == 0)
+            {
+                /* timeout */
+                print_error("Timeout on receiving response.");
+                finished = true;
+                continue;
+            }
 
-        read_count = read(socket_fd, read_buf, read_size);
-        if (read_count == -1)
-        {
-            print_error("read failed: %s", strerror(errno));
-            free(read_buf);
-            free(parse_buf);
-            return EXIT_FAILURE;
+            read_count = read(socket_fd, read_buf, read_size);
+            if (read_count == -1)
+            {
+                print_error("read failed: %s", strerror(errno));
+                free(read_buf);
+                free(parse_buf);
+                return EXIT_FAILURE;
+            }
+            if (check_further_file)
+            {
+                check_further_file = false;
+                if (read_count == 0)
+                {
+                    finished = true;
+                    continue;
+                }
+                else
+                {
+                    expect_file = true;
+                    store_file = false;
+                    search_filename = true;
+                    written = 0;
+                }
+            }
+            amount += read_count;
+            if (read_count == 0)
+            {
+                finished = true;
+                eof = true;
+                /* end of file */
+            }
+            VERBOSE("Received %ld bytes.", (long ) read_count);
+            buffer_full = eof || (amount >= read_size);
+            if (read_count > 0)
+            {
+                /* copy the read bytes into the parse buffer */
+                memcpy(current_write_pos, read_buf, read_count);
+                current_write_pos += read_count;
+            }
         }
-        amount += read_count;
-        if (read_count == 0)
-        {
-            finished = true;
-            /* end of file */
-        }
-        VERBOSE("Received %ld bytes.", (long) read_count);
-        buffer_full = finished || (amount >= read_size);
-        if (read_count > 0)
-        {
-            /* copy the read bytes into the parse buffer */
-            memcpy(current_write_pos, read_buf, read_count);
-            current_write_pos += read_count;
-        }
-
         if (expect_status)
-         {
+        {
             if (receive_status)
             {
                 VERBOSE("Receiving status.");
@@ -680,11 +708,11 @@ static int read_response(int socket_fd)
             if (buffer_full)
             {
                 /* it must contain the status= string now */
-				if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
-				{
-				    finished = true;
-				    continue;
-				}
+                if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
 
                 /* search for line feed */
                 search = parse_buf + strlen(GET_STATUS);
@@ -702,155 +730,80 @@ static int read_response(int socket_fd)
                     print_error("Malformed response (no status terminator).");
                     continue;
                 }
-                if (EXIT_SUCCESS != convert_server_status(search, found, &server_status))
+                if (EXIT_SUCCESS
+                        != convert_server_status(search, found, &server_status))
                 {
                     finished = true;
                     continue;
                 }
                 expect_status = false;
                 VERBOSE("Received status.");
-                expect_html_file = true;
+                expect_file = true;
                 move = (found - parse_buf + 1);
                 if (move > 0)
                 {
                     memmove(parse_buf, found + 1, amount - move);
                     amount -= move;
                     current_write_pos = parse_buf + amount;
-                    buffer_full = finished || (amount >= read_size);
+                    buffer_full = eof || (amount >= read_size);
                 }
             }
             else
             {
-                 if (amount < (strlen(GET_STATUS) + 2))
-                 {
-                     /* message is too short */
-                     continue;
-                 }
-                 /* it must contain the status= string now */
-                 if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
-                 {
-                     finished = true;
-                     continue;
-                 }
-                 /* search for line feed */
-                 search = parse_buf + strlen(GET_STATUS);
-                 found = search_terminator(search, parse_buf + amount);
-                 if (found == search)
-                 {
-                     finished = true;
-                     print_error("Malformed response (status).");
-                     continue;
-                 }
-                 if (found == (parse_buf + amount))
-                 {
-                     /* not found */
-                     continue;
-                 }
-                 if (convert_server_status(search, found, &server_status)
-                     != EXIT_SUCCESS)
-                 {
-                     finished = true;
-                     continue;
-                 }
-                 expect_status = false;
-                 VERBOSE("Received status.");
-                 expect_html_file = true;
-                 move = (found - parse_buf + 1);
-                 if (move > 0)
-                 {
-                     memmove(parse_buf, found + 1, amount - move);
-                     amount -= move;
-                     current_write_pos = parse_buf + amount;
-                     buffer_full = finished || (amount >= read_size);
-                 }
-                 if (!finished && (amount == 0))
-                 {
-                     continue;
-                 }
-            }
-        }
-        if (expect_html_file)
-        {
-            VERBOSE("Receive response file.");
-            if (buffer_full)
-            {
-            	if (search_filename)
-            	{
-                    /* it must contain the file= string now */
-                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    search_filename = false;
-                    move = strlen(GET_FILE);
-
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = finished || (amount >= read_size);
-                    search_end = true;
-            	}
-                if (search_end)
-                {
-                    /* search for line feed */
-                    if (filename_buf[0] == '\0')
-                    {
-                        search = parse_buf + strlen(GET_FILE);
-                    }
-                    else
-                    {
-                        search = parse_buf + strlen(GET_LEN);
-                    }
-                    found = search_terminator(search, parse_buf + amount);
-                    if (found == search)
-                    {
-                        finished = true;
-                        print_error("Malformed response.");
-                        continue;
-                    }
-                    if (found == (parse_buf + amount))
-                    {
-                        /* not found */
-                        if (buffer_full)
-                        {
-                            /* it must contain the terminator in this case */
-                            print_error("Malformed response (no html filename terminator).");
-                            finished = true;
-                            continue;
-                        }
-                        /* see if there is further data */
-                        continue;
-                    }
-                    search_end = false;
-                    /* make 0 string */
-                    *found = 0;
-                    if (filename_buf[0] == '\0')
-                    {
-                        if (found >= (parse_buf + read_size))
-                        {
-                            /* filename too long, can not store it */
-                            print_error("Filename too long.");
-                            finished = true;
-                            continue;
-                        }
-                        strcpy(filename_buf, parse_buf);
-                        move = strlen(filename_buf) + 1;
-                        memmove(parse_buf, parse_buf + move, amount - move);
-                        amount -= move;
-                        current_write_pos = parse_buf + amount;
-                        buffer_full = finished || (amount >= read_size);
-
-                    }
-                }
-            }
-            else
-            {
-                if (amount < (strlen(GET_FILE) + 2))
+                if (amount < (strlen(GET_STATUS) + 2))
                 {
                     /* message is too short */
                     continue;
                 }
+                /* it must contain the status= string now */
+                if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
+                /* search for line feed */
+                search = parse_buf + strlen(GET_STATUS);
+                found = search_terminator(search, parse_buf + amount);
+                if (found == search)
+                {
+                    finished = true;
+                    print_error("Malformed response (status).");
+                    continue;
+                }
+                if (found == (parse_buf + amount))
+                {
+                    /* not found */
+                    continue;
+                }
+                if (convert_server_status(search, found,
+                        &server_status) != EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
+                expect_status = false;
+                VERBOSE("Received status.");
+                expect_file = true;
+                move = (found - parse_buf + 1);
+                if (move > 0)
+                {
+                    memmove(parse_buf, found + 1, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                }
+                if (!eof && (amount == 0))
+                {
+                    continue;
+                }
+            }
+        }
+
+        if (expect_file)
+        {
+            VERBOSE("Receive response file.");
+            if (buffer_full)
+            {
                 if (search_filename)
                 {
                     /* it must contain the file= string now */
@@ -865,40 +818,478 @@ static int read_response(int socket_fd)
                     memmove(parse_buf, parse_buf + move, amount - move);
                     amount -= move;
                     current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end = true;
                 }
+                if (search_end)
+                {
+                    /* search for line feed */
+                    if (EXIT_SUCCESS
+                            != search_end_marker(&found, parse_buf, amount,
+                                    buffer_full))
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    if (found == NULL)
+                    {
+                        continue;
+                    }
+                    search_end = false;
+                    /* make 0 string */
+                    *found = 0;
+                    search_end = false;
+                    /* get filename now */
+                    if (found >= (parse_buf + read_size))
+                    {
+                        /* filename too long, can not store it */
+                        print_error("Filename too long.");
+                        finished = true;
+                        continue;
+                    }
+                    strcpy(filename_buf, parse_buf);
+                    move = strlen(filename_buf) + 1;
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_len = true;
+                }
+                if (search_len)
+                {
+                    if (amount < (strlen(GET_LEN) + 2))
+                    {
+                        /* message is too short */
+                        continue;
+                    }
+                    /* it must contain the file= string now */
 
-                /* search for linefeed */
-                search = parse_buf;
-                found = search_terminator(search, parse_buf + amount);
-                if (found == search)
-                {
-                    finished = true;
-                    print_error("Malformed response (status).");
-                    continue;
-                }
-                if (found == (parse_buf + amount))
-                {
-                    /* not found */
-                    continue;
-                }
+                    if (check_text(amount, GET_LEN, parse_buf) != EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    search_len = false;
+                    move = strlen(GET_LEN);
 
-                if (convert_server_status(search, found, &server_status)
-                    != EXIT_SUCCESS)
-                {
-                    finished = true;
-                    continue;
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end2 = true;
                 }
-                expect_status = false;
+                if (search_end2)
+                {
+                    if (EXIT_SUCCESS
+                            != search_end_marker(&found, parse_buf, amount,
+                                    buffer_full))
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    if (found == NULL)
+                    {
+                        continue;
+                    }
+                    /* get file size now */
+                    if (convert_file_size(parse_buf, found, &file_size) !=
+                    EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    move = found - parse_buf + 1;
+                    memmove(parse_buf, found + 1, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end2 = false;
+                    store_file = true;
+                }
+                if (store_file)
+                {
+                    if (store == NULL)
+                    {
+                        store = fopen(filename_buf, "w+");
+                        if (NULL == store)
+                        {
+                            print_error("Can not create file %s", filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                    }
+                    if (file_size == 0)
+                    {
+                        if (0 != fclose(store))
+                        {
+                            print_error("Can not close file: %s",
+                                    strerror(errno));
+                        }
+                        store = NULL;
+                        if (amount > 0)
+                        {
+                            expect_file = true;
+                            store_file = false;
+                            search_filename = true;
+                            written = 0;
+                        }
+                        else
+                        {
+                            finished = true;
+                        }
+                        continue;
+                    }
+                    if (eof)
+                    {
+                        if (amount == 0)
+                        {
+                            print_error("Too less data found for file %s.",
+                                    filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                        to_file =
+                                amount < (file_size - written) ?
+                                        amount : (file_size - written);
+                        file_written = fwrite(parse_buf, sizeof(char), to_file,
+                                store);
+                        if (file_written < to_file)
+                        {
+                            print_error("Error on writing file %s",
+                                    filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                        written += file_written;
+                        if (written < file_size)
+                        {
+                            /* sorry this is too less data */
+                            print_error("Too less data for file %s",
+                                    filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                        if (0 != fclose(store))
+                        {
+                            print_error("Can not close file: %s",
+                                    strerror(errno));
+                        }
+                        store = NULL;
+
+                        memmove(parse_buf, parse_buf + file_written,
+                                amount - file_written);
+                        amount -= file_written;
+                        current_write_pos = parse_buf + amount;
+                        buffer_full = eof || (amount >= read_size);
+                        if (amount > 0)
+                        {
+                            expect_file = true;
+                            store_file = false;
+                            search_filename = true;
+                            written = 0;
+                            continue;
+                        }
+                        finished = true;
+                    }
+                    else
+                    {
+                        if (amount == 0)
+                        {
+                            continue;
+                        }
+                        to_file =
+                                amount < (file_size - written) ?
+                                        amount : (file_size - written);
+                        file_written = fwrite(parse_buf, sizeof(char), to_file,
+                                store);
+                        if (file_written < to_file)
+                        {
+                            print_error("Error on writing file %s",
+                                    filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                        written += file_written;
+                        if (written == file_size)
+                        {
+                            if (0 != fclose(store))
+                            {
+                                print_error("Can not close file: %s",
+                                        strerror(errno));
+                            }
+                            store = NULL;
+                        }
+                        if (amount - file_written > 0)
+                        {
+                            memmove(parse_buf, parse_buf + file_written,
+                                    amount - file_written);
+                        }
+                        amount -= file_written;
+                        current_write_pos = parse_buf + amount;
+                        buffer_full = eof || (amount >= read_size);
+                        if ((store == NULL) && (amount > 0))
+                        {
+                            if (amount > 0)
+                            {
+                                expect_file = true;
+                                store_file = false;
+                                search_filename = true;
+                                written = 0;
+                                continue;
+                            }
+                            else
+                            {
+                                /* see for further file */
+                                check_further_file = true;
+                            }
+                        }
+                        continue;
+
+                    }
+                }
             }
+            else
+            {
 
+                if (search_filename)
+                {
+                    if (amount < (strlen(GET_FILE) + 2))
+                    {
+                        /* message is too short */
+                        continue;
+                    }
+                    /* it must contain the file= string now */
+                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    search_filename = false;
+                    move = strlen(GET_FILE);
+
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end = true;
+                }
+                if (search_end)
+                {
+                    /* search for line feed */
+                    if (EXIT_SUCCESS
+                            != search_end_marker(&found, parse_buf, amount,
+                                    buffer_full))
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    if (found == NULL)
+                    {
+                        continue;
+                    }
+                    search_end = false;
+                    /* make 0 string */
+                    *found = 0;
+                    search_end = false;
+                    /* get filename now */
+                    if (found >= (parse_buf + read_size))
+                    {
+                        /* filename too long, can not store it */
+                        print_error("Filename too long.");
+                        finished = true;
+                        continue;
+                    }
+                    strcpy(filename_buf, parse_buf);
+                    move = strlen(filename_buf) + 1;
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_len = true;
+                }
+                if (search_len)
+                {
+                    if (amount < (strlen(GET_LEN) + 2))
+                    {
+                        /* message is too short */
+                        continue;
+                    }
+                    /* it must contain the file= string now */
+
+                    if (check_text(amount, GET_LEN, parse_buf) != EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    search_len = false;
+                    move = strlen(GET_LEN);
+
+                    memmove(parse_buf, parse_buf + move, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end2 = true;
+                }
+                if (search_end2)
+                {
+                    if (EXIT_SUCCESS
+                            != search_end_marker(&found, parse_buf, amount,
+                                    buffer_full))
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    if (found == NULL)
+                    {
+                        continue;
+                    }
+                    /* get file size now */
+                    if (convert_file_size(parse_buf, found, &file_size) !=
+                    EXIT_SUCCESS)
+                    {
+                        finished = true;
+                        continue;
+                    }
+                    move = found - parse_buf + 1;
+                    memmove(parse_buf, found + 1, amount - move);
+                    amount -= move;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    search_end2 = false;
+                    store_file = true;
+                }
+                if (store_file)
+                {
+                    if (store == NULL)
+                    {
+                        store = fopen(filename_buf, "w+");
+                        if (NULL == store)
+                        {
+                            print_error("Can not create file %s", filename_buf);
+                            finished = true;
+                            continue;
+                        }
+                    }
+                    if (file_size == 0)
+                    {
+                        if (0 != fclose(store))
+                        {
+                            print_error("Can not close file: %s",
+                                    strerror(errno));
+                        }
+                        store = NULL;
+                        if (amount > 0)
+                        {
+                            expect_file = true;
+                            store_file = false;
+                            search_filename = true;
+                            written = 0;
+                        }
+                        else
+                        {
+                            check_further_file = true;
+                        }
+                        continue;
+                    }
+
+                    if (amount == 0)
+                    {
+                        continue;
+                    }
+                    to_file =
+                            amount < (file_size - written) ?
+                                    amount : (file_size - written);
+                    file_written = fwrite(parse_buf, sizeof(char), to_file,
+                            store);
+                    if (file_written < to_file)
+                    {
+                        print_error("Error on writing file %s", filename_buf);
+                        finished = true;
+                        continue;
+                    }
+                    written += file_written;
+                    if (written == file_size)
+                    {
+                        if (0 != fclose(store))
+                        {
+                            print_error("Can not close file: %s",
+                                    strerror(errno));
+                        }
+                        store = NULL;
+                    }
+                    memmove(parse_buf, parse_buf + file_written, amount - file_written);
+                    amount -= file_written;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    if ((store == NULL) && (amount > 0))
+                    {
+                        if (amount > 0)
+                        {
+                            expect_file = true;
+                            store_file = false;
+                            search_filename = true;
+                            written = 0;
+                            continue;
+                        }
+                        else
+                        {
+                            /* see for further file */
+                            check_further_file = true;
+                        }
+                    }
+                    continue;
+
+                }
+
+            }
         }
     }
     free(read_buf);
     free(parse_buf);
     free(filename_buf);
+    if (store != NULL)
+    {
+        if (0 != fclose(store))
+        {
+            print_error("Can not close file: %s", strerror(errno));
+        }
+    }
 
     return result;
 
+}
+
+int search_end_marker(char** found, char* parse_buf, int amount,
+bool buffer_full)
+{
+    char* search;
+    char* terminator;
+
+    /* search for line feed */
+    search = parse_buf;
+    terminator = search_terminator(search, parse_buf + amount);
+    if (terminator == search)
+    {
+        print_error("Malformed response.");
+        return EXIT_FAILURE;
+    }
+    if (terminator == (parse_buf + amount))
+    {
+        /* not found */
+        if (buffer_full)
+        {
+            /* it must contain the terminator in this case */
+            print_error("Malformed response.");
+            return EXIT_FAILURE;
+        }
+        /* see if there is further data */
+        *found = NULL;
+        return EXIT_SUCCESS;
+    }
+    /* make 0 string */
+    *terminator = 0;
+    *found = terminator;
+    return EXIT_SUCCESS;
 }
 
 /**
@@ -928,7 +1319,7 @@ static char* search_terminator(char* start, char* end)
 /**
  * \brief searches the terminator character.
  *
- * \param start where to start the number begings.
+ * \param start where to start the number begins.
  * \param end marker contains newline.
  * \server_status converted server status as number.
  *
@@ -943,7 +1334,7 @@ static int convert_server_status(char* start, char* end, int* server_status)
     errno = 0;
     result = strtol(start, &end_strtol, INPUT_NUM_BASE);
     if ((errno == ERANGE && (result == LONG_MAX || result == LONG_MIN))
-        || (errno != 0 && result == 0))
+            || (errno != 0 && result == 0))
     {
         print_error("Can not convert server status (%s).", strerror(errno));
         return EXIT_FAILURE;
@@ -963,8 +1354,48 @@ static int convert_server_status(char* start, char* end, int* server_status)
     }
     else
     {
-        *server_status = (int)result;
+        *server_status = (int) result;
     }
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * \brief searches the terminator character.
+ *
+ * \param start where to start the number begins.
+ * \param end marker contains newline.
+ * \size converted size as result.
+ *
+ * \return EXIT_SUCCESS if file size was converted, else EXIT_FAILURE.
+ */
+static int convert_file_size(char* start, char* end, long* size)
+{
+    long int result;
+    char* end_strtol;
+
+    *end = '\0'; /* make a string for strtol function */
+    errno = 0;
+    result = strtol(start, &end_strtol, INPUT_NUM_BASE);
+    if ((errno == ERANGE && (result == LONG_MAX || result == LONG_MIN))
+            || (errno != 0 && result == 0))
+    {
+        print_error("Can not convert file size (%s).", strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+    if (end_strtol == start)
+    {
+        print_error("No digits were found.");
+        return EXIT_FAILURE;
+    }
+
+    if (result < 0)
+    {
+        print_error("File size is negative: %l.", result);
+        return EXIT_FAILURE;
+    }
+    *size = result;
 
     return EXIT_SUCCESS;
 }
@@ -984,12 +1415,13 @@ int check_text(size_t amount, char* text, char* parse_buf)
     len = strlen(text);
 
     /* it must contain the status= string now */
-    if (amount < (len + 2)) {
+    if (amount < (len + 2))
+    {
         /* message is too short */
         print_error("Malformed response (too short %s).", text);
         EXIT_FAILURE;
     }
-    if (strncmp(GET_STATUS, parse_buf, len) != 0)
+    if (strncmp(text, parse_buf, len) != 0)
     {
         print_error("Malformed response (no %s).", text);
         EXIT_FAILURE;
