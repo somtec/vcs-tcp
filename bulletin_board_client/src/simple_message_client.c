@@ -10,9 +10,8 @@
  * @date 2015/12/07
  *
  *
- * TODO fix storing of png file
  * TODO remove duplicated code
- *
+ * TODO Execute tests on annuminas.
  */
 
 /*
@@ -86,18 +85,18 @@ static void print_error(const char* message, ...);
 static int init(const char** program_args);
 static void cleanup(bool exit);
 static void verbose(const char* file_name, const char* function_name, int line,
-        const char* message, ...);
+    const char* message, ...);
 static int execute(const char* server, const char* port, const char* user,
-        const char* message, const char* image_url);
+    const char* message, const char* image_url);
 static int send_request(const char* user, const char* message,
-        const char* image_url, int socket_fd);
+    const char* image_url, int socket_fd);
 static int read_response(int socket_fd);
 static char* search_terminator(char* start, char* end);
 static int convert_server_status(char* start, char* end, int* server_status);
 static int convert_file_size(char* start, char* end, long* size);
 int check_text(size_t amount, char* text, char* parse_buf);
 int search_end_marker(char** found, char* parse_buf, int amount,
-bool buffer_full);
+    bool buffer_full);
 
 /*
  * -------------------------------------------------------------- functions --
@@ -272,15 +271,14 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     {
         print_error(strerror(errno));
     }
-    written =
-            fprintf(stream,
-                    "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
-                            "  -p, --port <port>       well-known port of the server [0..65535]\n"
-                            "  -u, --user <name>       name of the posting user\n"
-                            "  -i, --image <URL>       URL pointing to an image of the posting user\n"
-                            "  -m, --message <message> message to be added to the bulletin board\n"
-                            "  -v, --verbose           verbose output\n"
-                            "  -h, --help\n");
+    written = fprintf(stream,
+        "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
+        "  -p, --port <port>       well-known port of the server [0..65535]\n"
+        "  -u, --user <name>       name of the posting user\n"
+        "  -i, --image <URL>       URL pointing to an image of the posting user\n"
+        "  -m, --message <message> message to be added to the bulletin board\n"
+        "  -v, --verbose           verbose output\n"
+        "  -h, --help\n");
     if (written < 0)
     {
         print_error(strerror(errno));
@@ -935,7 +933,7 @@ static int read_response(int socket_fd)
                         }
                         else
                         {
-                            finished = true;
+                            check_further_file = true;
                         }
                         continue;
                     }
@@ -1019,15 +1017,12 @@ static int read_response(int socket_fd)
                             }
                             store = NULL;
                         }
-                        if (amount - file_written > 0)
-                        {
-                            memmove(parse_buf, parse_buf + file_written,
+                        memmove(parse_buf, parse_buf + file_written,
                                     amount - file_written);
-                        }
                         amount -= file_written;
                         current_write_pos = parse_buf + amount;
                         buffer_full = eof || (amount >= read_size);
-                        if ((store == NULL) && (amount > 0))
+                        if (store == NULL)
                         {
                             if (amount > 0)
                             {
@@ -1044,7 +1039,6 @@ static int read_response(int socket_fd)
                             }
                         }
                         continue;
-
                     }
                 }
             }
@@ -1221,7 +1215,7 @@ static int read_response(int socket_fd)
                     amount -= file_written;
                     current_write_pos = parse_buf + amount;
                     buffer_full = eof || (amount >= read_size);
-                    if ((store == NULL) && (amount > 0))
+                    if (store == NULL)
                     {
                         if (amount > 0)
                         {
@@ -1238,9 +1232,7 @@ static int read_response(int socket_fd)
                         }
                     }
                     continue;
-
                 }
-
             }
         }
     }
@@ -1259,8 +1251,20 @@ static int read_response(int socket_fd)
 
 }
 
+/**
+ * /brief Search the terminator character.
+ *
+ * /param found return value pointer where the terminator has been found
+ *      or NULL if not found
+ * /param parse_buf where to search the terminator.
+ * /param amount of data to be tested.
+ * /param buffer_full indicates if the read buffer is full.
+ *
+ * /return EXIT_SUCCESS if found or too less data, EXIT_FAILURE if terminator
+ *      is at wrong position or not contained if buffer is full.
+ */
 int search_end_marker(char** found, char* parse_buf, int amount,
-bool buffer_full)
+    bool buffer_full)
 {
     char* search;
     char* terminator;
