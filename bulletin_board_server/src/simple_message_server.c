@@ -19,11 +19,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h> /* getopt, fork, close, execvp, STDIN_FILENO, STDOUT_FILENO*/
-#include <assert.h> /* assert */
-#include <sys/socket.h> /* socket, bind, listen, accept */
-#include <sys/wait.h> /* waitpid */
-#include <netdb.h> /* INADDR_ANY, kinds of sockaddr */
+#include <unistd.h>
+#include <assert.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <netdb.h>
 #include <errno.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
@@ -34,13 +34,16 @@
  * ---------------------------------------------------------------- defines --
  */
 
-#define INPUT_NUM_BASE 10 /* decimal format base for strtol */
+/* decimal format base for strtol */
+#define INPUT_NUM_BASE 10
+
+#define BUSINESS_LOGIC "simple_message_server_logic"
+#define BUSINESS_LOGIC_PATH "/usr/local/bin/simple_message_server_logic"
 
 #define LOWER_PORT_RANGE 0
 #define UPPER_PORT_RANGE 65536
-#define CONN_COUNT 10
-#define LOGIC_NAME "simple_message_server_logic"
-#define LOGIC_PATH "/usr/local/bin/simple_message_server_logic"
+/* handle up to max connections */
+#define MAX_CONNECTION 15
 
 /*
  * ---------------------------------------------------------------- globals --
@@ -55,14 +58,12 @@ static const char* sprogram_arg0 = NULL;
  * ------------------------------------------------------------- prototypes --
  */
 static void param_check(int argc, char** argv, char** port_nr);
-
-void kill_zombies(int signal);
-int reg_sig_handler(void);
-int handle_connections(int sockfd);
+static void kill_child_zombies(int signal);
+static int reg_sig_handler(void);
+static int do_connection(int socket_fd);
 static void print_error(const char* message, ...);
 static void print_usage(FILE* file, const char* message, int exit_code);
-/*static void cleanup(bool exit);*/
-static int set_up_connection(const char* portnumber);
+static int set_up_connection(const char* port_nr);
 
 /*
  * -------------------------------------------------------------- functions --
@@ -74,15 +75,18 @@ static int set_up_connection(const char* portnumber);
  * \param argc the number of arguments
  * \param argv the arguments itselves (including the program name in argv[0])
  *
- * \return success or failure
- * \retval 0 if the function call was successful, 1 otherwise
+ * \return success or failure.
+ * \retval EXIT_SUCCESS if the function call was successful.
+ * \retval EXIT_FAILURE on failure.
  *
  */
 int main(int argc, char** argv)
 {
     /* server port with type short int which is needed by the htons function */
     char* server_port = NULL;
-    int sockfd = 0;
+    int socket_fd;
+
+    sprogram_arg0 = argv[0];  /* must contain the filename anyway */
 
     /* calling the getopt function to get portnum*/
     param_check(argc, argv, &server_port);
@@ -91,7 +95,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    if ((sockfd = set_up_connection(server_port)) < 0)
+    if ((socket_fd = set_up_connection(server_port)) < 0)
     {
         return EXIT_FAILURE;
     }
@@ -99,7 +103,7 @@ int main(int argc, char** argv)
     {
         return EXIT_FAILURE;
     }
-    if (handle_connections(sockfd) < 0)
+    if (do_connection(socket_fd) < 0)
     {
         return EXIT_FAILURE;
     }
@@ -149,13 +153,12 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
 {
     int written;
 
-    written = fprintf(stream, "usage: %s options\n", command);
+    written = fprintf(stream, "usage: %s option\noptions:\n", command);
     if (written < 0)
     {
         print_error(strerror(errno));
     }
     written = fprintf(stream,
-            "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
             "  -p, --port <port>       well-known port of the server [0..65535]\n"
             "  -h, --help\n");
     if (written < 0)
@@ -174,20 +177,7 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
  *
  * \return void
  */
-#if 0
-static void cleanup(bool exit_program)
-{
 
-    (void) fflush(stderr); /* do not handle erros here */
-    (void) fflush(stdout);
-
-    if (exit_program)
-    {
-        exit(EXIT_FAILURE);
-    }
-
-}
-#endif
 /**
  * \brief the method for checking the passed parameters
  *
@@ -198,12 +188,11 @@ static void cleanup(bool exit_program)
  * \param port_str resulting port string for further usage
  *
  */
-void param_check(int argc, char **argv, char** port_str)
+static void param_check(int argc, char **argv, char** port_str)
 {
     char* end_ptr;
     long int port_nr = 0;
     int c;
-    int param_error = 0;
 
     opterr = 0;
 
@@ -219,7 +208,8 @@ void param_check(int argc, char **argv, char** port_str)
         {
         case 'p':
             port_nr = strtol(optarg, &end_ptr, INPUT_NUM_BASE);
-            if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN)) || (errno != 0 && port_nr == 0))
+            if ((errno == ERANGE && (port_nr == LONG_MAX || port_nr == LONG_MIN))
+                    || (errno != 0 && port_nr == 0))
             {
                 print_error("Can not convert port number (%s).", strerror(errno));
                 print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
@@ -249,13 +239,9 @@ void param_check(int argc, char **argv, char** port_str)
             break;
         }
     }
-    /* if user somehow messed other things up :) */
-    if (argc - optind >= 1)
-    {
-        param_error = 1;
-    }
 
-    if (param_error == 1)
+    /* if user added extra arguments */
+    if (argc - optind >= 1)
     {
         print_usage(stderr, sprogram_arg0, EXIT_FAILURE);
     }
@@ -263,18 +249,19 @@ void param_check(int argc, char **argv, char** port_str)
 }
 
 /**
- * \brief Installs signal handler for killing my child zombies.
+ * \brief Install signal handler for killing child zombie processes.
  *
- * \return The return value is zero if it succeeds, and -1 on failure.
- * The following errno error conditions are defined for this function: EINVAL
+ * If the functions fails then errno is set to EINVAL, see sigaction.
+ *
+ * \return 0 if sighandler was installed, else -1 on failure.
  */
 int reg_sig_handler(void)
 {
     struct sigaction sig;
-    sig.sa_handler = kill_zombies;
+    sig.sa_handler = kill_child_zombies;
     /*
-     * excludes all signals from the signal handler mask
-     * returns always 0, so return value can be ignored.
+     * excludes all signals from the signal handler mask.
+     * Return value can be ignored, is always 0.
      */
     (void) sigemptyset(&sig.sa_mask);
     sig.sa_flags = SA_RESTART;
@@ -284,28 +271,28 @@ int reg_sig_handler(void)
 }
 
 /**
- * \brief knifes all the zombies
+ * \brief Kill all my children otherwise they will be zombies.
  */
-void kill_zombies(int signal)
+static void kill_child_zombies(int signal)
 {
     /*
      * waitpid waits for information about child-processes
-     * (pid_t)(-1) means, status is requested for any child process
-     * argument 2 (0) can store termination status of the terminated process,
-     * but we don't care about
+     * status is requested for any child process
+     * not interested in status of child process.
      * WNOHANG makes this function non-blocking
      */
     (void) signal;
-    while (waitpid((pid_t) (-1), 0, WNOHANG) > 0)
+    while (waitpid((pid_t) (WAIT_ANY), NULL, WNOHANG) > 0)
     {
     }
 }
 
-static int set_up_connection(const char* portnumber)
+static int set_up_connection(const char* port_nr)
 {
-    int sockfd = 0;
+    int socket_fd = 0;
     struct addrinfo hints;
-    struct addrinfo *result, *rp;
+    struct addrinfo* result;
+    struct addrinfo* rp;
 
     /* resetting the structs */
     memset(&hints, 0, sizeof(hints));
@@ -324,7 +311,7 @@ static int set_up_connection(const char* portnumber)
      * getting a linked list of available adresses.
      * stores the first one in &result
      */
-    if (getaddrinfo(NULL, portnumber, &hints, &result) != 0)
+    if (getaddrinfo(NULL, port_nr, &hints, &result) != 0)
     {
 
         print_error("error getaddrinfo\n");
@@ -337,133 +324,124 @@ static int set_up_connection(const char* portnumber)
      */
     for (rp = result; rp != NULL; rp = rp->ai_next)
     {
-        sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (sockfd == -1)
+        socket_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (socket_fd == -1)
         {
             continue;
         }
-        if (bind(sockfd, rp->ai_addr, rp->ai_addrlen) == 0)
+        if (bind(socket_fd, rp->ai_addr, rp->ai_addrlen) == 0)
         {
             break;
         }
-        close(sockfd);
+        close(socket_fd);
     }
 
     /* no address succeeded */
     if (rp == NULL)
     {
+        freeaddrinfo(result);
         print_error("error bind\n");
         return -1;
     }
 
     freeaddrinfo(result);
 
-    if (listen(sockfd, CONN_COUNT) < 0)
+    if (listen(socket_fd, MAX_CONNECTION) < 0)
     {
-
         print_error("error listen\n");
-        (void) close(sockfd);
-        return -1;
+        (void) close(socket_fd);
+        return EXIT_FAILURE;
     }
 
-    return sockfd;
+    return socket_fd;
 }
 
-int handle_connections(int sockfd)
+/**
+ * \brief handle the connections of socket_fd.
+ */
+static int do_connection(int socket_fd)
 {
-    int pid = 0;
+    int pid;
     struct sockaddr_storage addr_inf;
     socklen_t socklen = sizeof(addr_inf);
-    int connfd = 0;
+    int connection_fd = 0;
 
     while (1)
     {
-        if ((connfd = accept(sockfd, (struct sockaddr*) &addr_inf, &socklen)) < 0)
+        if ((connection_fd = accept(socket_fd, (struct sockaddr*) &addr_inf, &socklen)) < 0)
         {
-            print_error("error when trying to accept client connection\n");
+            print_error("Accept failed.\n");
             continue;
         }
+
         (void) fprintf(stdout, "accepting connection worked\n");
-        (void) fprintf(stdout, "listening socket: %d\n", sockfd);
-        (void) fprintf(stdout, "connected socket: %d\n", connfd);
+        (void) fprintf(stdout, "listening socket: %d\n", socket_fd);
+        (void) fprintf(stdout, "connected socket: %d\n", connection_fd);
 
         if ((pid = fork()) < 0)
         {
-            print_error("error when forking\n");
-            (void) close(sockfd);
-            (void) close(connfd);
-            return -1;
+            print_error("error on forking\n");
+            (void) close(socket_fd);
+            (void) close(connection_fd);
+            return EXIT_FAILURE;
         }
         /* code, executed by the child process */
-        if (!pid)
+        if (pid == 0)
         {
             (void) fprintf(stdout, "forking worked\n");
             /* child process doesn't need listening socket */
-            (void) close(sockfd);
-
-            /* this should redirect the standard i/o to the socket
-             if (dup2(connfd, STDIN_FILENO) < 0
-             || dup2(connfd, STDOUT_FILENO) < 0) {
-             fprintf(stderr,
-             "error when trying to redirect the std streams\n");
-             (void) close(connfd);
-             return -1;
-             }
-             */
-
-            /*
-             * ### FB_CF: Warum doch nicht dup2()?
-             */
-            /*
-             * ### FB_CF: stderr auch aufs socket umzuleiten macht nicht wirklich Sinn.
-             *            Dann koennen Sie keine Fehlermeldungen mehr ausgeben. [-1]
-             */
-
-            close(0); /* close standard input  */
-            close(1); /* close standard output */
-            close(2); /* close standard error  */
-
-            if (dup(connfd) != 0 || dup(connfd) != 1 || dup(connfd) != 2)
+            if (close(socket_fd) != 0)
             {
-                /*
-                 * ### FB_CF: Fehlermeldungen beinhalten nicht argv[0]
-                 */
-                print_error("error duplicating socket for stdin/stdout/stderr");
-                (void) close(connfd);
-                return -1;
+                print_error("Child process could not close listening socket.");
+                (void) close(connection_fd);
+                exit(EXIT_FAILURE);
+            }
+
+            /* redirect stdin and stdout to connect socket */
+            if ((dup2(connection_fd, STDIN_FILENO) != 0) || (
+                    dup2(connection_fd, STDOUT_FILENO) != 0))
+            {
+                print_error("Child process dup failed.\n");
+                (void) close(connection_fd); /* in case of error no handling */
+                exit(EXIT_FAILURE);
+            }
+
+            /* After dup, connection_fd is no longer needed */
+            if (close(connection_fd) != 0)
+            {
+                print_error("Child process could not close connect socket.\n");
+                exit(EXIT_FAILURE);
             }
 
             /*
              * this should overlay the simple_message_server_logic
              * over the child process
              */
-            if (execl(LOGIC_PATH, LOGIC_NAME, (char*) NULL) < 0)
+            if (execl(BUSINESS_LOGIC_PATH, BUSINESS_LOGIC, NULL) < 0)
             {
-                /*
-                 * can't print error message, because stdout is already the socket fd.
-                 * so the client would get the error message.
-                 * (void) fprintf(stderr, "execvp command threw an error");
-                 */
-                (void) close(connfd);
-                return -1;
+                print_error("Could not start server business logic.\n");
+                (void) close(connection_fd);
+                return EXIT_FAILURE;
             }
-            (void) close(connfd);
-            return 0;
+            (void) close(connection_fd);
+            return EXIT_SUCCESS;
 
-            /* code, executed by the server process */
         }
         else
         {
+            /* code, executed by the server process */
+            /* in the parent */
             /*
              * if an error occurs when trying to close the listening socket in the parent process,
              * it can be ignored
              */
-            (void) close(connfd);
+            (void) close(connection_fd);
         }
     }
 
-    /* never come here, need return value for compiler */
+    /* never come here */
     assert(0);
     return EXIT_FAILURE;
 }
 /* === EOF ================================================================== */
+
