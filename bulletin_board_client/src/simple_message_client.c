@@ -592,9 +592,9 @@ static int read_response(int socket_fd)
     bool search_end2 = false;
     FILE* store = NULL;
     bool eof = false;
-    long written = 0;
-    long file_written;
-    int to_file;
+    size_t written = 0;
+    size_t file_written;
+    size_t to_file;
     bool check_further_file = false;
 
     read_size = smax_filename + 1;
@@ -959,7 +959,7 @@ static int read_response(int socket_fd)
                             continue;
                         }
                         written += file_written;
-                        if (written < file_size)
+                        if ((long)written < file_size)
                         {
                             /* sorry this is too less data */
                             print_error("Too less data for file %s",
@@ -1008,7 +1008,7 @@ static int read_response(int socket_fd)
                             continue;
                         }
                         written += file_written;
-                        if (written == file_size)
+                        if ((long)written == file_size)
                         {
                             if (0 != fclose(store))
                             {
@@ -1202,7 +1202,7 @@ static int read_response(int socket_fd)
                         continue;
                     }
                     written += file_written;
-                    if (written == file_size)
+                    if ((long) written == file_size)
                     {
                         if (0 != fclose(store))
                         {
@@ -1375,7 +1375,7 @@ static int convert_server_status(char* start, char* end, int* server_status)
  */
 static int convert_file_size(char* start, char* end, long* size)
 {
-    long int result;
+    long result;
     char* end_strtol;
 
     *end = '\0'; /* make a string for strtol function */
