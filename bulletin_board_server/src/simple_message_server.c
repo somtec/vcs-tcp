@@ -390,6 +390,11 @@ static int do_connection(int socket_fd)
         {
             (void) fprintf(stdout, "forking worked\n");
             /* child process doesn't need listening socket */
+            int debug = 1;
+            while (debug == 1)
+            {
+                debug = 1;
+            }
             if (close(socket_fd) != 0)
             {
                 print_error("Child process could not close listening socket.");
@@ -398,8 +403,8 @@ static int do_connection(int socket_fd)
             }
 
             /* redirect stdin and stdout to connect socket */
-            if ((dup2(connection_fd, STDIN_FILENO) != 0) || (
-                    dup2(connection_fd, STDOUT_FILENO) != 0))
+            if ((dup2(connection_fd, STDIN_FILENO) == -1) || (
+                    dup2(connection_fd, STDOUT_FILENO) == -1))
             {
                 print_error("Child process dup failed.\n");
                 (void) close(connection_fd); /* in case of error no handling */
