@@ -10,8 +10,6 @@
  * @date 2015/12/13
  *
  *
- * TODO remove duplicated code.
- * TODO check if we received at minimum 1 html file in response.
  */
 
 /*
@@ -54,6 +52,8 @@
 #define GET_FILE "file="
 #define GET_LEN "len="
 
+#define HTML_FILE ".html"
+
 /* Define for the request field terminator */
 #define FIELD_TERMINATOR '\n'
 
@@ -68,7 +68,7 @@
  * --------------------------------------------------------------- static --
  */
 
-/** Maximum filename length of file system. */
+/** Maximum filename length of file system including terminating 0. */
 static long int smax_filename = 0;
 
 /** Current program arguments. */
@@ -166,6 +166,7 @@ int main(int argc, const char* argv[])
 
     result = execute(server, port, user, message, img_url);
     cleanup(false);
+    VERBOSE("%s exit with code %d.", sprogram_arg0, result);
 
     return result;
 }
@@ -185,9 +186,9 @@ static int init(const char** program_args)
     sprogram_arg0 = program_args[0];
     VERBOSE("Initialize program.");
 
-    /* get maximum filename size */
+    /* get maximum filename size, may contain path info */
     errno = 0;
-    smax_filename = pathconf(".", _PC_NAME_MAX);
+    smax_filename = pathconf(".", _PC_PATH_MAX);
     if (-1 == smax_filename)
     {
         smax_filename = 0;
@@ -593,8 +594,11 @@ static int read_response(int socket_fd)
     size_t file_written;
     size_t to_file;
     bool check_further_file = false;
+    bool received_html = false;
+    size_t html_extension = strlen(HTML_FILE);
+    size_t filename_len;
 
-    read_size = smax_filename + 1;
+    read_size = smax_filename;
 
     /* filenames must not exceed maximum name length of system */
     read_buf = malloc(read_size * sizeof(char));
@@ -619,7 +623,6 @@ static int read_response(int socket_fd)
         print_error("Can not allocate filename buffer: %s.", strerror(ENOMEM));
         return EXIT_FAILURE;
     }
-    filename_buf[0] = '\0';
 
     /* Initialize the file descriptor set. */
     FD_ZERO(&set);
@@ -665,9 +668,18 @@ static int read_response(int socket_fd)
                 check_further_file = false;
                 if (read_count == 0)
                 {
-                    /* this is the end of the loop */
                     finished = true;
-                    result = server_status;
+                    /* this is the end of the while loop */
+                    /* everything ok, so set the server status as result */
+                    if (!received_html)
+                    {
+                        /* no html file received */
+                        result = EXIT_FAILURE;
+                    }
+                    else
+                    {
+                        result = server_status;
+                    }
                     continue;
                 }
                 else
@@ -746,7 +758,7 @@ static int read_response(int socket_fd)
                 continue;
             }
             expect_status = false;
-            VERBOSE("Received status.");
+            VERBOSE("Received status %d.", server_status);
             expect_file = true;
             move = (found - parse_buf + 1);
             if (move > 0)
@@ -767,424 +779,240 @@ static int read_response(int socket_fd)
 
         if (expect_file)
         {
-            if (buffer_full)
+            if (search_filename)
             {
-                if (search_filename)
-                {
-                    /* it must contain the file= string now */
-                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    search_filename = false;
-                    move = strlen(GET_FILE);
-
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end = true;
-                }
-                if (search_end)
-                {
-                    /* search for line feed */
-                    if (EXIT_SUCCESS
-                            != search_end_marker(&found, parse_buf, amount,
-                                    buffer_full))
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    if (found == NULL)
-                    {
-                        continue;
-                    }
-                    search_end = false;
-                    /* make 0 string */
-                    *found = 0;
-                    search_end = false;
-                    /* get filename now */
-                    if (found >= (parse_buf + read_size))
-                    {
-                        /* filename too long, can not store it */
-                        print_error("Filename too long.");
-                        finished = true;
-                        continue;
-                    }
-
-                    strcpy(filename_buf, parse_buf);
-                    /* the evil testcase 8 has written do /dev/null */
-                    /* so I do not allow to write to paths other than . */
-                    if (strchr(filename_buf, '/') != NULL)
-                    {
-                        print_error("File %s is not allowed.", filename_buf);
-                        finished = true;
-                        continue;
-                    }
-                    move = strlen(filename_buf) + 1;
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_len = true;
-                }
-                if (search_len)
-                {
-                    if (amount < (strlen(GET_LEN) + 2))
-                    {
-                        /* message is too short */
-                        continue;
-                    }
-                    /* it must contain the file= string now */
-
-                    if (check_text(amount, GET_LEN, parse_buf) != EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    search_len = false;
-                    move = strlen(GET_LEN);
-
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end2 = true;
-                }
-                if (search_end2)
-                {
-                    if (EXIT_SUCCESS
-                            != search_end_marker(&found, parse_buf, amount,
-                                    buffer_full))
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    if (found == NULL)
-                    {
-                        continue;
-                    }
-                    /* get file size now */
-                    if (convert_file_size(parse_buf, found, &file_size) !=
-                    EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    move = found - parse_buf + 1;
-                    memmove(parse_buf, found + 1, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end2 = false;
-                    store_file = true;
-                }
-                if (store_file)
-                {
-                    if (store == NULL)
-                    {
-                        store = fopen(filename_buf, "w+");
-                        if (NULL == store)
-                        {
-                            print_error("Can not create file %s", filename_buf);
-                            finished = true;
-                            continue;
-                        }
-                    }
-                    if (file_size == 0)
-                    {
-                        if (0 != fclose(store))
-                        {
-                            print_error("Can not close file: %s",
-                                    strerror(errno));
-                        }
-                        else
-                        {
-                            VERBOSE("File %s stored.", filename_buf);
-
-                        }
-
-                        store = NULL;
-                        if (amount > 0)
-                        {
-                            expect_file = true;
-                            store_file = false;
-                            search_filename = true;
-                            written = 0;
-                        }
-                        else
-                        {
-                            check_further_file = true;
-                        }
-                        continue;
-                    }
-                    if (eof)
-                    {
-                        if (amount == 0)
-                        {
-                            print_error("Too less data found for file %s.",
-                                    filename_buf);
-                            finished = true;
-                            continue;
-                        }
-                        to_file =
-                                amount < (file_size - written) ?
-                                        amount : (file_size - written);
-                        file_written = fwrite(parse_buf, sizeof(char), to_file,
-                                store);
-                        if (file_written < to_file)
-                        {
-                            print_error("Error on writing file %s",
-                                    filename_buf);
-                            finished = true;
-                            continue;
-                        }
-                        written += file_written;
-                        if ((long) written < file_size)
-                        {
-                            /* sorry this is too less data */
-                            print_error("Too less data for file %s",
-                                    filename_buf);
-                            finished = true;
-                            continue;
-                        }
-                        if (0 != fclose(store))
-                        {
-                            print_error("Can not close file: %s",
-                                    strerror(errno));
-                        }
-                        else
-                        {
-                            VERBOSE("File %s stored.", filename_buf);
-                        }
-                        store = NULL;
-
-                        memmove(parse_buf, parse_buf + file_written,
-                                amount - file_written);
-                        amount -= file_written;
-                        current_write_pos = parse_buf + amount;
-                        buffer_full = eof || (amount >= read_size);
-                        if (amount > 0)
-                        {
-                            expect_file = true;
-                            store_file = false;
-                            search_filename = true;
-                            written = 0;
-                            continue;
-                        }
-                        finished = true;
-                    }
-                    else
-                    {
-                        if (amount == 0)
-                        {
-                            continue;
-                        }
-                        to_file =
-                                amount < (file_size - written) ?
-                                        amount : (file_size - written);
-                        file_written = fwrite(parse_buf, sizeof(char), to_file,
-                                store);
-                        if (file_written < to_file)
-                        {
-                            print_error("Error on writing file %s",
-                                    filename_buf);
-                            finished = true;
-                            continue;
-                        }
-                        written += file_written;
-                        if ((long) written == file_size)
-                        {
-                            if (0 != fclose(store))
-                            {
-                                print_error("Can not close file: %s",
-                                        strerror(errno));
-                            }
-                            else
-                            {
-                                VERBOSE("File %s stored.", filename_buf);
-                            }
-
-                            store = NULL;
-                        }
-                        memmove(parse_buf, parse_buf + file_written,
-                                amount - file_written);
-                        amount -= file_written;
-                        current_write_pos = parse_buf + amount;
-                        buffer_full = eof || (amount >= read_size);
-                        if (store == NULL)
-                        {
-                            if (amount > 0)
-                            {
-                                expect_file = true;
-                                store_file = false;
-                                search_filename = true;
-                                written = 0;
-                                continue;
-                            }
-                            else
-                            {
-                                /* see for further file */
-                                check_further_file = true;
-                            }
-                        }
-                        continue;
-                    }
-                }
-            }
-            else
-            {
-
-                if (search_filename)
+                if (!buffer_full)
                 {
                     if (amount < (strlen(GET_FILE) + 2))
                     {
                         /* message is too short */
                         continue;
                     }
-                    /* it must contain the file= string now */
-                    if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    search_filename = false;
-                    move = strlen(GET_FILE);
-
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end = true;
                 }
-                if (search_end)
-                {
-                    /* search for line feed */
-                    if (EXIT_SUCCESS
-                            != search_end_marker(&found, parse_buf, amount,
-                                    buffer_full))
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    if (found == NULL)
-                    {
-                        continue;
-                    }
-                    search_end = false;
-                    /* make 0 string */
-                    *found = 0;
-                    search_end = false;
-                    /* get filename now */
-                    if (found >= (parse_buf + read_size))
-                    {
-                        /* filename too long, can not store it */
-                        print_error("Filename too long.");
-                        finished = true;
-                        continue;
-                    }
-                    strcpy(filename_buf, parse_buf);
-                    /* the evil testcase 8 has written do /dev/null */
-                    /* so I do not allow to write to paths other than . */
-                    if (strchr(filename_buf, '/') != NULL)
-                    {
-                        print_error("File %s is not allowed.", filename_buf);
-                        finished = true;
-                        continue;
-                    }
-                    move = strlen(filename_buf) + 1;
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_len = true;
-                }
-                if (search_len)
-                {
-                    if (amount < (strlen(GET_LEN) + 2))
-                    {
-                        /* message is too short */
-                        continue;
-                    }
-                    /* it must contain the file= string now */
 
-                    if (check_text(amount, GET_LEN, parse_buf) != EXIT_SUCCESS)
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    search_len = false;
-                    move = strlen(GET_LEN);
-
-                    memmove(parse_buf, parse_buf + move, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end2 = true;
-                }
-                if (search_end2)
+                /* it must contain the file= string now */
+                if (check_text(amount, GET_FILE, parse_buf) != EXIT_SUCCESS)
                 {
-                    if (EXIT_SUCCESS
-                            != search_end_marker(&found, parse_buf, amount,
-                                    buffer_full))
-                    {
-                        finished = true;
-                        continue;
-                    }
-                    if (found == NULL)
-                    {
-                        continue;
-                    }
-                    /* get file size now */
-                    if (convert_file_size(parse_buf, found, &file_size) !=
+                    finished = true;
+                    continue;
+                }
+                search_filename = false;
+                move = strlen(GET_FILE);
+
+                memmove(parse_buf, parse_buf + move, amount - move);
+                amount -= move;
+                current_write_pos = parse_buf + amount;
+                buffer_full = eof || (amount >= read_size);
+                search_end = true;
+            }
+            if (search_end)
+            {
+                /* search for line feed */
+                if (EXIT_SUCCESS
+                        != search_end_marker(&found, parse_buf, amount,
+                                buffer_full))
+                {
+                    finished = true;
+                    continue;
+                }
+                if (found == NULL)
+                {
+                    continue;
+                }
+                search_end = false;
+                /* make 0 string */
+                *found = 0;
+                search_end = false;
+                /* get filename now */
+                if (found >= (parse_buf + read_size))
+                {
+                    /* filename too long, can not store it */
+                    print_error("Filename too long.");
+                    finished = true;
+                    continue;
+                }
+                strcpy(filename_buf, parse_buf);
+                move = strlen(filename_buf) + 1;
+                memmove(parse_buf, parse_buf + move, amount - move);
+                amount -= move;
+                current_write_pos = parse_buf + amount;
+                buffer_full = eof || (amount >= read_size);
+                search_len = true;
+            }
+            if (search_len)
+            {
+                if (amount < (strlen(GET_LEN) + 2))
+                {
+                    /* message is too short */
+                    continue;
+                }
+                /* it must contain the file= string now */
+
+                if (check_text(amount, GET_LEN, parse_buf) != EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
+                search_len = false;
+                move = strlen(GET_LEN);
+
+                memmove(parse_buf, parse_buf + move, amount - move);
+                amount -= move;
+                current_write_pos = parse_buf + amount;
+                buffer_full = eof || (amount >= read_size);
+                search_end2 = true;
+            }
+            if (search_end2)
+            {
+                if (EXIT_SUCCESS
+                        != search_end_marker(&found, parse_buf, amount,
+                                buffer_full))
+                {
+                    finished = true;
+                    continue;
+                }
+                if (found == NULL)
+                {
+                    continue;
+                }
+                /* get file size now */
+                if (convert_file_size(parse_buf, found, &file_size) !=
                     EXIT_SUCCESS)
+                {
+                    finished = true;
+                    continue;
+                }
+                move = found - parse_buf + 1;
+                memmove(parse_buf, found + 1, amount - move);
+                amount -= move;
+                current_write_pos = parse_buf + amount;
+                buffer_full = eof || (amount >= read_size);
+                search_end2 = false;
+                store_file = true;
+            }
+            if (store_file)
+            {
+                if (store == NULL)
+                {
+                    store = fopen(filename_buf, "w+");
+                    if (NULL == store)
                     {
+                        print_error("Can not create file %s", filename_buf);
                         finished = true;
                         continue;
                     }
-                    move = found - parse_buf + 1;
-                    memmove(parse_buf, found + 1, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                    search_end2 = false;
-                    store_file = true;
                 }
-                if (store_file)
+                if (file_size == 0)
                 {
-                    if (store == NULL)
+                    if (0 != fclose(store))
                     {
-                        store = fopen(filename_buf, "w+");
-                        if (NULL == store)
-                        {
-                            print_error("Can not create file %s", filename_buf);
-                            finished = true;
-                            continue;
-                        }
+                        print_error("Can not close file: %s",
+                                strerror(errno));
                     }
-                    if (file_size == 0)
+                    else
                     {
-                        if (0 != fclose(store))
+                        if (!received_html)
                         {
-                            print_error("Can not close file: %s",
-                                    strerror(errno));
+                            filename_len = strlen(filename_buf);
+                            if (filename_len >= html_extension)
+                            {
+                                received_html = 0 == strcasecmp(
+                                    HTML_FILE,
+                                    filename_buf + filename_len - html_extension);
+                            }
                         }
-                        store = NULL;
-                        if (amount > 0)
-                        {
-                            expect_file = true;
-                            store_file = false;
-                            search_filename = true;
-                            written = 0;
-                        }
-                        else
-                        {
-                            check_further_file = true;
-                        }
+                        VERBOSE("File %s stored.", filename_buf);
+                    }
+                    store = NULL;
+                    if (amount > 0)
+                    {
+                        expect_file = true;
+                        store_file = false;
+                        search_filename = true;
+                        written = 0;
+                    }
+                    else
+                    {
+                        check_further_file = true;
+                    }
+                    continue;
+                }
+                if (eof)
+                {
+                    if (amount == 0)
+                    {
+                        print_error("Too less data found for file %s.",
+                            filename_buf);
+                        finished = true;
                         continue;
                     }
-
+                    to_file = amount < (file_size - written) ?
+                        amount : (file_size - written);
+                    file_written = fwrite(parse_buf, sizeof(char), to_file,
+                            store);
+                    if (file_written < to_file)
+                    {
+                        print_error("Error on writing file %s",
+                            filename_buf);
+                        finished = true;
+                        continue;
+                    }
+                    written += file_written;
+                    if ((long) written < file_size)
+                    {
+                        /* sorry this is too less data */
+                        print_error("Too less data for file %s",
+                            filename_buf);
+                        finished = true;
+                        continue;
+                    }
+                    if (0 != fclose(store))
+                    {
+                        print_error("Can not close file: %s",
+                                strerror(errno));
+                    }
+                    else
+                    {
+                        if (!received_html)
+                        {
+                            filename_len = strlen(filename_buf);
+                            if (filename_len >= html_extension)
+                            {
+                                received_html = 0 == strcasecmp(
+                                    HTML_FILE,
+                                    filename_buf + filename_len - html_extension);
+                            }
+                        }
+                        VERBOSE("File %s stored.", filename_buf);
+                    }
+                    store = NULL;
+                    memmove(parse_buf, parse_buf + file_written,
+                            amount - file_written);
+                    amount -= file_written;
+                    current_write_pos = parse_buf + amount;
+                    buffer_full = eof || (amount >= read_size);
+                    if (amount > 0)
+                    {
+                        expect_file = true;
+                        store_file = false;
+                        search_filename = true;
+                        written = 0;
+                        continue;
+                    }
+                    finished = true;
+                    /* set result of server */
+                    if (!received_html)
+                    {
+                        /* no html file received */
+                        result = EXIT_FAILURE;
+                    }
+                    else
+                    {
+                        result = server_status;
+                    }
+                }
+                else
+                {
                     if (amount == 0)
                     {
                         continue;
@@ -1196,7 +1024,8 @@ static int read_response(int socket_fd)
                             store);
                     if (file_written < to_file)
                     {
-                        print_error("Error on writing file %s", filename_buf);
+                        print_error("Error on writing file %s",
+                                filename_buf);
                         finished = true;
                         continue;
                     }
@@ -1210,9 +1039,18 @@ static int read_response(int socket_fd)
                         }
                         else
                         {
+                            if (!received_html)
+                            {
+                                filename_len = strlen(filename_buf);
+                                if (filename_len >= html_extension)
+                                {
+                                    received_html = 0 == strcasecmp(
+                                        HTML_FILE,
+                                        filename_buf + filename_len - html_extension);
+                                }
+                            }
                             VERBOSE("File %s stored.", filename_buf);
                         }
-
                         store = NULL;
                     }
                     memmove(parse_buf, parse_buf + file_written,
