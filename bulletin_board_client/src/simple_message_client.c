@@ -659,6 +659,7 @@ static int read_response(int socket_fd)
                 print_error("read failed: %s", strerror(errno));
                 free(read_buf);
                 free(parse_buf);
+                free(filename_buf);
                 return EXIT_FAILURE;
             }
             if (check_further_file)
