@@ -10,8 +10,8 @@
  * @date 2015/12/07
  *
  *
- * TODO remove duplicated code
- * TODO Execute tests on annuminas.
+ * TODO remove duplicated code.
+ * TODO check if we received at minimum 1 html file in response.
  */
 
 /*
@@ -58,7 +58,7 @@
 #define FIELD_TERMINATOR '\n'
 
 /* Timeout for waiting on socket to become ready in seconds */
-#define SOCKET_TIMEOUT 10
+#define SOCKET_TIMEOUT 30
 
 /*
  * ---------------------------------------------------------------- globals --
@@ -157,8 +157,6 @@ int main(int argc, const char* argv[])
     img_url_text = img_url == NULL ? "<no image>" : img_url;
     VERBOSE("Got parameter server %s, port %s, user %s, message %s, "
             "image %s", server, port, user, message, img_url_text);
-
-    /* so_REuseaddr mit setsockopt im server */
 
     result = init(argv);
     if (EXIT_SUCCESS != result)
@@ -360,7 +358,6 @@ static int execute(const char* server, const char* port, const char* user,
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_UNSPEC; /* Allow IPv4 or IPv6 */
     hints.ai_socktype = SOCK_STREAM; /* TCP socket */
-    hints.ai_flags = 0;
     hints.ai_protocol = IPPROTO_TCP;
 
     info_result = getaddrinfo(server, port, &hints, &addr_result);
@@ -428,7 +425,7 @@ static int execute(const char* server, const char* port, const char* user,
         {
             print_error("Could not close socket: %s", strerror(errno));
         }
-        assert(0); /* mandatory due to our C rules */
+        assert(0); /* unreachable, therefore mandatory due to our C rules */
         return EXIT_FAILURE;
 
     }
@@ -845,7 +842,16 @@ static int read_response(int socket_fd)
                         finished = true;
                         continue;
                     }
+
                     strcpy(filename_buf, parse_buf);
+                    /* the evil testcase 8 has written do /dev/null */
+                    /* so I do not allow to write to paths other than . */
+                    if (strchr(filename_buf, '/') != NULL)
+                    {
+                        print_error("File %s is not allowed.", filename_buf);
+                        finished = true;
+                        continue;
+                    }
                     move = strlen(filename_buf) + 1;
                     memmove(parse_buf, parse_buf + move, amount - move);
                     amount -= move;
@@ -923,6 +929,11 @@ static int read_response(int socket_fd)
                             print_error("Can not close file: %s",
                                     strerror(errno));
                         }
+                        else
+                        {
+                            VERBOSE("File %s stored.", filename_buf);
+                        }
+
                         store = NULL;
                         if (amount > 0)
                         {
@@ -972,6 +983,10 @@ static int read_response(int socket_fd)
                             print_error("Can not close file: %s",
                                     strerror(errno));
                         }
+                        else
+                        {
+                            VERBOSE("File %s stored.", filename_buf);
+                        }
                         store = NULL;
 
                         memmove(parse_buf, parse_buf + file_written,
@@ -1015,6 +1030,11 @@ static int read_response(int socket_fd)
                                 print_error("Can not close file: %s",
                                         strerror(errno));
                             }
+                            else
+                            {
+                                VERBOSE("File %s stored.", filename_buf);
+                            }
+
                             store = NULL;
                         }
                         memmove(parse_buf, parse_buf + file_written,
@@ -1094,6 +1114,14 @@ static int read_response(int socket_fd)
                         continue;
                     }
                     strcpy(filename_buf, parse_buf);
+                    /* the evil testcase 8 has written do /dev/null */
+                    /* so I do not allow to write to paths other than . */
+                    if (strchr(filename_buf, '/') != NULL)
+                    {
+                        print_error("File %s is not allowed.", filename_buf);
+                        finished = true;
+                        continue;
+                    }
                     move = strlen(filename_buf) + 1;
                     memmove(parse_buf, parse_buf + move, amount - move);
                     amount -= move;
@@ -1209,6 +1237,11 @@ static int read_response(int socket_fd)
                             print_error("Can not close file: %s",
                                     strerror(errno));
                         }
+                        else
+                        {
+                            VERBOSE("File %s stored.", filename_buf);
+                        }
+
                         store = NULL;
                     }
                     memmove(parse_buf, parse_buf + file_written, amount - file_written);
