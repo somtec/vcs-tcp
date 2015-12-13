@@ -5,6 +5,11 @@ Bulletin Board Server/client
 Author: Andrea   Maierhofer <ic14b024@technikum-wien.at> 
 Author: Thomas   Schmid     <ic14b013@technikum-wien.at>
 
+
+Doxygen documentation
+=====================
+logo.jpg must be in the source folder otherwise the image is missing in html documentation
+
 simple_message_server:
 ======================
 
@@ -20,7 +25,7 @@ DESCRIPTION:
    
    parameters:
 
-      -p port : the server port number from 1 to 65535
+      -p port : the server port number from 0 to 65535
 
       example:
 
@@ -31,6 +36,7 @@ Every incoming connection is accepted via accept() and then a child process is f
 is called. (execlp() call to "simple_message_server_logic")
 Because all sockets are duplicated by a fork, following socket handling must happen:
 The child process closes the listening socket and the parent closes the new socket from the accept call.
+Only IPV4 is supported.
 			
 simple_message_client:
 ======================
@@ -56,11 +62,15 @@ DESCRIPTION:
       -p port : port number 
       -u user : user name 
       -m message : a message posted to the bulletin board
-      -i image :  optionally an image can be posted with the message (URL) not finished yet
+      -i image :  optionally an image can be posted with the message (URL)
 
 The simple_message_client establishes a connection to the server via the given host and port. (socket(), connect())
-It then sends the given user, message to the simple_message_server via send().
+It then sends the given user, message to the simple_message_server.
 All files from the response stream are saved in the local directory.
+Paths are not resolved when server file= contains a directory that does not exist.
+
+
+
 
 
 
