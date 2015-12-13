@@ -7,7 +7,7 @@
  *
  * @author Andrea Maierhofer    1410258024  <andrea.maierhofer@technikum-wien.at>
  * @author Thomas Schmid        1410258013  <thomas.schmid@technikum-wien.at>
- * @date 2015/12/07
+ * @date 2015/12/13
  *
  *
  * TODO remove duplicated code.
@@ -271,12 +271,12 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
     }
     written = fprintf(stream,
         "  -s, --server <server>   fully qualified domain name or IP address of the server\n"
-        "  -p, --port <port>       well-known port of the server [0..65535]\n"
+        "  -p, --port <port>       well-known port of the server [%d..%d]\n"
         "  -u, --user <name>       name of the posting user\n"
         "  -i, --image <URL>       URL pointing to an image of the posting user\n"
         "  -m, --message <message> message to be added to the bulletin board\n"
         "  -v, --verbose           verbose output\n"
-        "  -h, --help\n");
+        "  -h, --help\n", LOWER_PORT_RANGE, UPPER_PORT_RANGE);
     if (written < 0)
     {
         print_error(strerror(errno));
@@ -440,7 +440,7 @@ static int execute(const char* server, const char* port, const char* user,
                 straddr, port);
     }
 
-    freeaddrinfo(addr_result); /* No longer needed */
+    freeaddrinfo(addr_result); /* no longer needed */
 
     if (send_request(user, message, image_url, socket_fd) != EXIT_SUCCESS)
     {
@@ -640,7 +640,7 @@ static int read_response(int socket_fd)
             ready = select(socket_fd + 1, &set, NULL, NULL, &timeout);
             if (ready < 0)
             {
-                /* can not handle errors or signals */
+                /* can not handle errors or signals here */
                 print_error(strerror(errno));
                 finished = true;
                 continue;
@@ -657,17 +657,17 @@ static int read_response(int socket_fd)
             if (read_count == -1)
             {
                 print_error("read failed: %s", strerror(errno));
-                free(read_buf);
-                free(parse_buf);
-                free(filename_buf);
-                return EXIT_FAILURE;
+                finished = true;
+                continue;
             }
             if (check_further_file)
             {
                 check_further_file = false;
                 if (read_count == 0)
                 {
+                    /* this is the end of the loop */
                     finished = true;
+                    result = server_status;
                     continue;
                 }
                 else
@@ -683,7 +683,7 @@ static int read_response(int socket_fd)
             {
                 finished = true;
                 eof = true;
-                /* end of file */
+                /* end of file reached */
             }
             VERBOSE("Received %ld bytes.", (long ) read_count);
             buffer_full = eof || (amount >= read_size);
@@ -701,93 +701,63 @@ static int read_response(int socket_fd)
                 VERBOSE("Receiving status.");
                 receive_status = false;
             }
-            if (buffer_full)
-            {
-                /* it must contain the status= string now */
-                if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
-                {
-                    finished = true;
-                    continue;
-                }
-
-                /* search for line feed */
-                search = parse_buf + strlen(GET_STATUS);
-                found = search_terminator(search, parse_buf + amount);
-                if (found == search)
-                {
-                    finished = true;
-                    print_error("Malformed response (no status nr).");
-                    continue;
-                }
-                if (found == (parse_buf + amount))
-                {
-                    /* not found */
-                    finished = true;
-                    print_error("Malformed response (no status terminator).");
-                    continue;
-                }
-                if (EXIT_SUCCESS
-                        != convert_server_status(search, found, &server_status))
-                {
-                    finished = true;
-                    continue;
-                }
-                expect_status = false;
-                VERBOSE("Received status.");
-                expect_file = true;
-                move = (found - parse_buf + 1);
-                if (move > 0)
-                {
-                    memmove(parse_buf, found + 1, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                }
-            }
-            else
+            if (!buffer_full)
             {
                 if (amount < (strlen(GET_STATUS) + 2))
                 {
                     /* message is too short */
                     continue;
                 }
-                /* it must contain the status= string now */
-                if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
+            }
+            /* it must contain the status= string now */
+            if (check_text(amount, GET_STATUS, parse_buf) != EXIT_SUCCESS)
+            {
+                finished = true;
+                continue;
+            }
+            /* search for line feed */
+            search = parse_buf + strlen(GET_STATUS);
+            found = search_terminator(search, parse_buf + amount);
+            if (found == search)
+            {
+                finished = true;
+                print_error("Malformed response (status).");
+                continue;
+            }
+            if (found == (parse_buf + amount))
+            {
+                if (buffer_full)
                 {
+                    /* not found */
                     finished = true;
+                    print_error("Malformed response (no status terminator).");
                     continue;
                 }
-                /* search for line feed */
-                search = parse_buf + strlen(GET_STATUS);
-                found = search_terminator(search, parse_buf + amount);
-                if (found == search)
-                {
-                    finished = true;
-                    print_error("Malformed response (status).");
-                    continue;
-                }
-                if (found == (parse_buf + amount))
+                else
                 {
                     /* not found */
                     continue;
                 }
-                if (convert_server_status(search, found,
-                        &server_status) != EXIT_SUCCESS)
-                {
-                    finished = true;
-                    continue;
-                }
-                expect_status = false;
-                VERBOSE("Received status.");
-                expect_file = true;
-                move = (found - parse_buf + 1);
-                if (move > 0)
-                {
-                    memmove(parse_buf, found + 1, amount - move);
-                    amount -= move;
-                    current_write_pos = parse_buf + amount;
-                    buffer_full = eof || (amount >= read_size);
-                }
+            }
+            if (convert_server_status(search, found, &server_status) !=
+                EXIT_SUCCESS)
+            {
+                finished = true;
+                continue;
+            }
+            expect_status = false;
+            VERBOSE("Received status.");
+            expect_file = true;
+            move = (found - parse_buf + 1);
+            if (move > 0)
+            {
+                memmove(parse_buf, found + 1, amount - move);
+                amount -= move;
+                current_write_pos = parse_buf + amount;
+                buffer_full = eof || (amount >= read_size);
+            }
+            if (!buffer_full)
+            {
                 if (!eof && (amount == 0))
                 {
                     continue;
@@ -797,7 +767,6 @@ static int read_response(int socket_fd)
 
         if (expect_file)
         {
-            VERBOSE("Receive response file.");
             if (buffer_full)
             {
                 if (search_filename)
@@ -933,6 +902,7 @@ static int read_response(int socket_fd)
                         else
                         {
                             VERBOSE("File %s stored.", filename_buf);
+
                         }
 
                         store = NULL;
@@ -971,7 +941,7 @@ static int read_response(int socket_fd)
                             continue;
                         }
                         written += file_written;
-                        if ((long)written < file_size)
+                        if ((long) written < file_size)
                         {
                             /* sorry this is too less data */
                             print_error("Too less data for file %s",
@@ -1024,7 +994,7 @@ static int read_response(int socket_fd)
                             continue;
                         }
                         written += file_written;
-                        if ((long)written == file_size)
+                        if ((long) written == file_size)
                         {
                             if (0 != fclose(store))
                             {
@@ -1039,7 +1009,7 @@ static int read_response(int socket_fd)
                             store = NULL;
                         }
                         memmove(parse_buf, parse_buf + file_written,
-                                    amount - file_written);
+                                amount - file_written);
                         amount -= file_written;
                         current_write_pos = parse_buf + amount;
                         buffer_full = eof || (amount >= read_size);
@@ -1245,7 +1215,8 @@ static int read_response(int socket_fd)
 
                         store = NULL;
                     }
-                    memmove(parse_buf, parse_buf + file_written, amount - file_written);
+                    memmove(parse_buf, parse_buf + file_written,
+                            amount - file_written);
                     amount -= file_written;
                     current_write_pos = parse_buf + amount;
                     buffer_full = eof || (amount >= read_size);
@@ -1298,7 +1269,7 @@ static int read_response(int socket_fd)
  *      is at wrong position or not contained if buffer is full.
  */
 int search_end_marker(char** found, char* parse_buf, int amount,
-    bool buffer_full)
+bool buffer_full)
 {
     char* search;
     char* terminator;
@@ -1332,10 +1303,10 @@ int search_end_marker(char** found, char* parse_buf, int amount,
 
 /**
  * \brief searches the terminator character.
- * 
+ *
  * \param start where to start the search.
  * \param end marker not considered to be a valid position.
- * 
+ *
  * \return pointer to FIELD_TERMINATOR on success, or end when not found.
  */
 static char* search_terminator(char* start, char* end)
