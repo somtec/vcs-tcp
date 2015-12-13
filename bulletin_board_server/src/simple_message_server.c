@@ -154,8 +154,8 @@ static void print_usage(FILE* stream, const char* command, int exit_code)
         print_error(strerror(errno));
     }
     written = fprintf(stream,
-            "  -p, --port <port>       well-known port of the server [0..65535]\n"
-            "  -h, --help\n");
+            "  -p, --port <port>       well-known port of the server [%d..%d]\n"
+            "  -h, --help\n", LOWER_PORT_RANGE, UPPER_PORT_RANGE);
     if (written < 0)
     {
         print_error(strerror(errno));
