@@ -278,6 +278,7 @@ int register_signal_handler(void)
  */
 static void kill_child_handler(int signal)
 {
+    int saved_errno;
     /*
      * waitpid waits for information about child-processes
      * status is requested for any child process
@@ -285,9 +286,12 @@ static void kill_child_handler(int signal)
      * WNOHANG makes this function non-blocking
      */
     (void) signal; /* pedantic */
+    // waitpid() might overwrite errno, so we save and restore it:
+    saved_errno = errno;
     while (waitpid((pid_t) (WAIT_ANY), NULL, WNOHANG) > 0)
     {
     }
+    errno = saved_errno;
 }
 
 /**
