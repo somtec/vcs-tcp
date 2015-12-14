@@ -584,7 +584,7 @@ static int read_response(int socket_fd)
     bool search_end;
     bool buffer_full;
     char* filename_buf;
-    long file_size;
+    long file_size = 0;
     bool search_len = false;
     bool store_file = false;
     bool search_end2 = false;
