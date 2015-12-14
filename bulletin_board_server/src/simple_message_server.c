@@ -437,5 +437,6 @@ static int do_connection(int socket_fd)
     assert(0);
     return EXIT_FAILURE;
 }
+
 /* === EOF ================================================================== */
 
